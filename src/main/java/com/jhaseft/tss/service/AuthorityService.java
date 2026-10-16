@@ -20,4 +20,16 @@ public class AuthorityService {
     public List<Authority> getAll() {
         return authorityRepository.findAll();
     }
+
+    @Transactional
+    public Authority create(String name) {
+        Authority authority = new Authority();
+        authority.setName(name);
+        return authorityRepository.save(authority);
+    }
+
+    @Transactional
+    public void delete(String name) {
+        authorityRepository.deleteById(name);
+    }
 }

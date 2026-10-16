@@ -1,7 +1,10 @@
 package com.jhaseft.tss.controller;
 
+import com.jhaseft.tss.dto.CreateUserRequest;
+import com.jhaseft.tss.dto.UpdateUserRequest;
 import com.jhaseft.tss.model.User;
 import com.jhaseft.tss.service.UserService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,10 +25,28 @@ public class UserController {
         return userService.getAll();
     }
 
-    @GetMapping("/{login}")
-    public ResponseEntity<User> getByLogin(@PathVariable String login) {
-        return userService.getByLogin(login)
+    @GetMapping("/{id}")
+    public ResponseEntity<User> getById(@PathVariable Long id) {
+        return userService.getById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping
+    public ResponseEntity<User> create(@RequestBody CreateUserRequest req) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(userService.create(req));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<User> update(@PathVariable Long id, @RequestBody UpdateUserRequest req) {
+        return userService.update(id, req)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable Long id) {
+        userService.delete(id);
+        return ResponseEntity.noContent().build();
     }
 }
