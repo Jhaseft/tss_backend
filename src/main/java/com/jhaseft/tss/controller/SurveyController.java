@@ -5,6 +5,7 @@ import com.jhaseft.tss.model.Question;
 import com.jhaseft.tss.model.SubmissionAnswer;
 import com.jhaseft.tss.service.PublicFormService;
 import com.jhaseft.tss.service.StatsService;
+import com.jhaseft.tss.service.SurveyDefinitionService;
 import com.jhaseft.tss.model.QuestionOption;
 import com.jhaseft.tss.repository.*;
 import com.jhaseft.tss.service.SurveyImportService;
@@ -25,6 +26,7 @@ import java.util.Map;
 public class SurveyController {
 
     private final SurveyImportService importService;
+    private final SurveyDefinitionService definitionService;
     private final StatsService statsService;
     private final PublicFormService publicFormService;
     private final SurveyRepository surveyRepo;
@@ -35,6 +37,7 @@ public class SurveyController {
     private final QuestionOptionRepository optionRepo;
 
     public SurveyController(SurveyImportService importService,
+                             SurveyDefinitionService definitionService,
                              StatsService statsService,
                              PublicFormService publicFormService,
                              SurveyRepository surveyRepo,
@@ -44,6 +47,7 @@ public class SurveyController {
                              QuestionRepository questionRepo,
                              QuestionOptionRepository optionRepo) {
         this.importService = importService;
+        this.definitionService = definitionService;
         this.statsService = statsService;
         this.publicFormService = publicFormService;
         this.surveyRepo = surveyRepo;
@@ -54,10 +58,25 @@ public class SurveyController {
         this.optionRepo = optionRepo;
     }
 
-    // ── Admin: subir archivo ─────────────────────────────────────────────────
+    // ── Admin: crear encuesta desde definición JSON ──────────────────────────
 
-    @PostMapping("/surveys/upload")
-    public ResponseEntity<SurveyImportResultDTO> upload(
+    @PostMapping("/surveys/from-definition")
+    public ResponseEntity<SurveyImportResultDTO> fromDefinition(
+            @RequestBody SurveyDefinitionDTO def) {
+        try {
+            return ResponseEntity.ok(definitionService.create(def));
+        } catch (IllegalArgumentException e) {
+            SurveyImportResultDTO err = new SurveyImportResultDTO();
+            err.setErrors(List.of("Definición inválida: " + e.getMessage()));
+            return ResponseEntity.badRequest().body(err);
+        }
+    }
+
+    // ── Admin: importar respuestas CSV a survey existente ────────────────────
+
+    @PostMapping("/surveys/{id}/import-responses")
+    public ResponseEntity<SurveyImportResultDTO> importResponses(
+            @PathVariable Long id,
             @RequestParam MultipartFile file) {
         if (file.isEmpty()) {
             SurveyImportResultDTO err = new SurveyImportResultDTO();
@@ -65,11 +84,9 @@ public class SurveyController {
             return ResponseEntity.badRequest().body(err);
         }
         try {
-            SurveyImportResultDTO result = importService.importFile(file);
-            if (result.getSurveyId() == null) {
-                return ResponseEntity.badRequest().body(result);
-            }
-            return ResponseEntity.ok(result);
+            return ResponseEntity.ok(importService.importResponses(id, file));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
         } catch (IOException e) {
             SurveyImportResultDTO err = new SurveyImportResultDTO();
             err.setErrors(List.of("Error leyendo el archivo: " + e.getMessage()));

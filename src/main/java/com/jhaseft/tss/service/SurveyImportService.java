@@ -4,14 +4,11 @@ import com.jhaseft.tss.dto.SurveyImportResultDTO;
 import com.jhaseft.tss.model.*;
 import com.jhaseft.tss.repository.*;
 import com.jhaseft.tss.service.FileReaderService.ParsedFile;
-import com.jhaseft.tss.service.QuestionInferenceService.InferredQuestion;
-import com.jhaseft.tss.service.QuestionInferenceService.OptionDef;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -25,12 +22,10 @@ public class SurveyImportService {
     private final SurveyRepository surveyRepo;
     private final QuestionRepository questionRepo;
     private final QuestionOptionRepository optionRepo;
-    private final LikertScaleRepository likertScaleRepo;
     private final SubmissionRepository submissionRepo;
     private final SubmissionAnswerRepository answerRepo;
     private final SubmissionAnswerOptionRepository answerOptionRepo;
 
-    // Formatos de fecha de MS Forms y Google Forms
     private static final List<DateTimeFormatter> TIMESTAMP_FORMATS = List.of(
             DateTimeFormatter.ofPattern("M/d/yy H:mm:ss"),
             DateTimeFormatter.ofPattern("M/d/yyyy H:mm:ss"),
@@ -47,7 +42,6 @@ public class SurveyImportService {
                                 SurveyRepository surveyRepo,
                                 QuestionRepository questionRepo,
                                 QuestionOptionRepository optionRepo,
-                                LikertScaleRepository likertScaleRepo,
                                 SubmissionRepository submissionRepo,
                                 SubmissionAnswerRepository answerRepo,
                                 SubmissionAnswerOptionRepository answerOptionRepo) {
@@ -56,70 +50,35 @@ public class SurveyImportService {
         this.surveyRepo = surveyRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
-        this.likertScaleRepo = likertScaleRepo;
         this.submissionRepo = submissionRepo;
         this.answerRepo = answerRepo;
         this.answerOptionRepo = answerOptionRepo;
     }
 
+    // ── Importar respuestas CSV a survey existente (definido via JSON) ───────
+
     @Transactional
-    public SurveyImportResultDTO importFile(MultipartFile file) throws IOException {
-        // 1. Parsear archivo
-        ParsedFile parsed = fileReader.parse(file);
-        List<String> headers = parsed.getHeaders();
-        List<Map<String, String>> rows = parsed.getRows();
+    public SurveyImportResultDTO importResponses(Long surveyId, MultipartFile file) throws IOException {
+        Survey survey = surveyRepo.findById(surveyId)
+                .orElseThrow(() -> new NoSuchElementException("Survey " + surveyId + " no encontrado"));
 
-        // 2. Detectar origen y columna de timestamp
-        SurveyOrigin origin = inference.detectOrigin(headers);
-        String tsColumn = inference.getTimestampColumn(headers, origin);
-
-        // 3. Hash del contenido (guardado para referencia futura, sin bloquear re-importaciones)
-        String hash = sha256(file.getBytes());
-
-        // 4. Inferir preguntas
-        List<InferredQuestion> questions = inference.inferAll(headers, rows, origin);
-
-        // 5. Persistir Survey
-        Survey survey = new Survey();
-        survey.setName(Objects.requireNonNull(file.getOriginalFilename()));
-        survey.setOrigin(origin);
-        survey.setFileName(file.getOriginalFilename());
-        survey.setSourceHash(hash);
-        survey.setPublicSlug(UUID.randomUUID().toString());
-        survey = surveyRepo.save(survey);
-
-        // 6. Persistir Questions + Options
-        Map<String, Question> colToQuestion = new LinkedHashMap<>();
-        for (InferredQuestion iq : questions) {
-            Question q = new Question();
-            q.setSurvey(survey);
-            q.setColumnName(iq.getColumnName());
-            q.setText(truncate(iq.getText(), 1000));
-            q.setType(iq.getType());
-            q.setPosition(iq.getPosition());
-            q.setPersonalData(iq.isPersonalData());
-            q.setMatrixGroup(iq.getMatrixGroupName());
-
-            if (iq.getLikertScaleName() != null) {
-                q.setLikertScale(getOrCreateLikertScale(iq.getLikertScaleName(), iq.getOptions()));
-            }
-
-            q = questionRepo.save(q);
-
-            for (OptionDef opt : iq.getOptions()) {
-                QuestionOption qo = new QuestionOption();
-                qo.setQuestion(q);
-                qo.setValue(truncate(opt.getValue(), 500));
-                qo.setDisplayText(truncate(opt.getDisplayText(), 500));
-                qo.setPosition(opt.getPosition());
-                qo.setNumericValue(opt.getNumericValue());
-                optionRepo.save(qo);
-            }
-
-            colToQuestion.put(iq.getColumnName(), q);
+        List<Question> allQuestions = questionRepo.findBySurveyIdOrderByPosition(surveyId);
+        Map<String, Question> normIndex = new LinkedHashMap<>();
+        for (Question q : allQuestions) {
+            normIndex.put(inference.normalize(q.getColumnName()), q);
         }
 
-        // 7. Precargar opciones por pregunta para dedup en respuestas múltiples
+        ParsedFile parsed = fileReader.parse(file);
+        SurveyOrigin origin = survey.getOrigin();
+        String tsColumn = inference.getTimestampColumn(parsed.getHeaders(), origin);
+
+        Map<String, Question> colToQuestion = new LinkedHashMap<>();
+        for (String header : parsed.getHeaders()) {
+            if (header.equals(tsColumn)) continue;
+            Question q = matchQuestion(header, normIndex);
+            if (q != null) colToQuestion.put(header, q);
+        }
+
         Map<Long, Map<String, QuestionOption>> optionsByQuestion = new HashMap<>();
         for (Question q : colToQuestion.values()) {
             if (!optionsByQuestion.containsKey(q.getId())) {
@@ -130,15 +89,14 @@ public class SurveyImportService {
             }
         }
 
-        // 8. Persistir Submissions + Answers
         int loaded = 0;
         List<String> errors = new ArrayList<>();
+        List<Map<String, String>> rows = parsed.getRows();
 
         for (int rowIdx = 0; rowIdx < rows.size(); rowIdx++) {
             Map<String, String> row = rows.get(rowIdx);
 
-            // Dedup por rowIndex
-            if (submissionRepo.existsBySurveyIdAndRowIndex(survey.getId(), rowIdx)) continue;
+            if (submissionRepo.existsBySurveyIdAndRowIndex(surveyId, rowIdx)) continue;
 
             String tsRaw = tsColumn != null ? row.getOrDefault(tsColumn, "") : "";
             LocalDateTime submittedAt = parseTimestamp(tsRaw);
@@ -164,7 +122,6 @@ public class SurveyImportService {
                 ans.setNotApplicable(raw.isBlank());
                 ans = answerRepo.save(ans);
 
-                // Opciones para tipos de selección
                 if (!raw.isBlank()) {
                     if (q.getType() == QuestionType.MULTIPLE_CHOICE) {
                         saveMultipleOptions(ans, raw, q, optionsByQuestion, origin);
@@ -185,9 +142,40 @@ public class SurveyImportService {
         result.setSurveyName(survey.getName());
         result.setOrigin(origin.name());
         result.setRowsLoaded(loaded);
-        result.setQuestionsDetected(questions.size());
+        result.setQuestionsDetected(colToQuestion.size());
         result.setErrors(errors);
         return result;
+    }
+
+    private Question matchQuestion(String csvHeader, Map<String, Question> normIndex) {
+        String norm = inference.normalize(csvHeader);
+
+        Question q = normIndex.get(norm);
+        if (q != null) return q;
+
+        String stripped = norm.replaceFirst("^\\d+[.)\\s]+\\s*", "");
+        q = normIndex.get(stripped);
+        if (q != null) return q;
+
+        int bStart = csvHeader.indexOf('[');
+        int bEnd   = csvHeader.lastIndexOf(']');
+        if (bStart >= 0 && bEnd > bStart) {
+            String inner = inference.normalize(csvHeader.substring(bStart + 1, bEnd));
+            q = normIndex.get(inner);
+            if (q != null) return q;
+        }
+
+        for (Map.Entry<String, Question> entry : normIndex.entrySet()) {
+            String key = entry.getKey();
+            if (key.length() > 15 && norm.contains(key)) return entry.getValue();
+        }
+
+        for (Map.Entry<String, Question> entry : normIndex.entrySet()) {
+            String key = entry.getKey();
+            if (stripped.length() > 15 && key.contains(stripped)) return entry.getValue();
+        }
+
+        return null;
     }
 
     // ── Helpers de persistencia ──────────────────────────────────────────────
@@ -196,7 +184,6 @@ public class SurveyImportService {
                                       Map<Long, Map<String, QuestionOption>> optsByQ,
                                       SurveyOrigin origin) {
         List<String> parts = inference.splitMultiOptions(raw, origin);
-
         Map<String, QuestionOption> opMap = optsByQ.getOrDefault(q.getId(), Map.of());
         for (String part : parts) {
             String normPart = inference.normalize(part);
@@ -206,7 +193,6 @@ public class SurveyImportService {
             if (opt != null) {
                 sao.setOption(opt);
             } else {
-                // Opción no conocida → buscar o crear
                 QuestionOption newOpt = createOptionOnDemand(q, part);
                 opMap.put(normPart, newOpt);
                 sao.setOption(newOpt);
@@ -218,10 +204,8 @@ public class SurveyImportService {
     private void saveSingleOption(SubmissionAnswer ans, String raw,
                                    Question q, Map<Long, Map<String, QuestionOption>> optsByQ) {
         Map<String, QuestionOption> opMap = optsByQ.getOrDefault(q.getId(), Map.of());
-        String normRaw = inference.normalize(raw);
-        QuestionOption opt = opMap.get(normRaw);
+        QuestionOption opt = opMap.get(inference.normalize(raw));
         if (opt == null) return;
-
         SubmissionAnswerOption sao = new SubmissionAnswerOption();
         sao.setAnswer(ans);
         sao.setOption(opt);
@@ -237,27 +221,6 @@ public class SurveyImportService {
         return optionRepo.save(opt);
     }
 
-    private LikertScale getOrCreateLikertScale(String name, List<OptionDef> options) {
-        return likertScaleRepo.findByName(name).orElseGet(() -> {
-            LikertScale ls = new LikertScale();
-            ls.setName(name);
-            ls.setOptionsJson(buildOptionsJson(options));
-            return likertScaleRepo.save(ls);
-        });
-    }
-
-    private String buildOptionsJson(List<OptionDef> opts) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < opts.size(); i++) {
-            OptionDef o = opts.get(i);
-            if (i > 0) sb.append(",");
-            sb.append("{\"value\":\"").append(o.getValue())
-              .append("\",\"numeric\":").append(o.getNumericValue() == null ? "null" : o.getNumericValue())
-              .append("}");
-        }
-        return sb.append("]").toString();
-    }
-
     // ── Utilidades ───────────────────────────────────────────────────────────
 
     private LocalDateTime parseTimestamp(String raw) {
@@ -270,20 +233,4 @@ public class SurveyImportService {
         return LocalDateTime.now();
     }
 
-    private String sha256(byte[] data) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(data);
-            StringBuilder sb = new StringBuilder();
-            for (byte b : digest) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (Exception e) {
-            return UUID.randomUUID().toString();
-        }
-    }
-
-    private String truncate(String s, int max) {
-        if (s == null) return null;
-        return s.length() > max ? s.substring(0, max) : s;
-    }
 }
