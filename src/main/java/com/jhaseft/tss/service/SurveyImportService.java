@@ -298,10 +298,4 @@ public class SurveyImportService {
         if (s == null) return null;
         return s.length() > max ? s.substring(0, max) : s;
     }
-
-    private String cleanItem(String colName) {
-        String s = colName.trim();
-        if (s.startsWith("[") && s.endsWith("]")) s = s.substring(1, s.length() - 1).trim();
-        return truncate(s, 500);
-    }
 }

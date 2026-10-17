@@ -2,15 +2,14 @@ package com.jhaseft.tss.controller;
 
 import com.jhaseft.tss.dto.*;
 import com.jhaseft.tss.model.Question;
+import com.jhaseft.tss.model.SubmissionAnswer;
 import com.jhaseft.tss.service.PublicFormService;
 import com.jhaseft.tss.service.StatsService;
 import com.jhaseft.tss.model.QuestionOption;
-import com.jhaseft.tss.repository.QuestionOptionRepository;
-import com.jhaseft.tss.repository.QuestionRepository;
-import com.jhaseft.tss.repository.SubmissionRepository;
-import com.jhaseft.tss.repository.SurveyRepository;
+import com.jhaseft.tss.repository.*;
 import com.jhaseft.tss.service.SurveyImportService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,6 +29,8 @@ public class SurveyController {
     private final PublicFormService publicFormService;
     private final SurveyRepository surveyRepo;
     private final SubmissionRepository submissionRepo;
+    private final SubmissionAnswerRepository answerRepo;
+    private final SubmissionAnswerOptionRepository answerOptionRepo;
     private final QuestionRepository questionRepo;
     private final QuestionOptionRepository optionRepo;
 
@@ -38,6 +39,8 @@ public class SurveyController {
                              PublicFormService publicFormService,
                              SurveyRepository surveyRepo,
                              SubmissionRepository submissionRepo,
+                             SubmissionAnswerRepository answerRepo,
+                             SubmissionAnswerOptionRepository answerOptionRepo,
                              QuestionRepository questionRepo,
                              QuestionOptionRepository optionRepo) {
         this.importService = importService;
@@ -45,6 +48,8 @@ public class SurveyController {
         this.publicFormService = publicFormService;
         this.surveyRepo = surveyRepo;
         this.submissionRepo = submissionRepo;
+        this.answerRepo = answerRepo;
+        this.answerOptionRepo = answerOptionRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
     }
@@ -103,6 +108,37 @@ public class SurveyController {
             dto.setResponseCount(submissionRepo.countBySurveyId(s.getId()));
             return ResponseEntity.ok(dto);
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // ── Admin: eliminar encuesta (cascada manual) ────────────────────────────
+
+    @DeleteMapping("/surveys/{id}")
+    @Transactional
+    public ResponseEntity<Void> delete(@PathVariable Long id) {
+        if (!surveyRepo.existsById(id)) return ResponseEntity.notFound().build();
+
+        List<Long> submissionIds = submissionRepo.findBySurveyId(id)
+                .stream().map(s -> s.getId()).toList();
+
+        if (!submissionIds.isEmpty()) {
+            List<Long> answerIds = answerRepo.findBySubmissionIdIn(submissionIds)
+                    .stream().map(SubmissionAnswer::getId).toList();
+            if (!answerIds.isEmpty()) {
+                answerOptionRepo.deleteAll(answerOptionRepo.findByAnswerIdIn(answerIds));
+                answerRepo.deleteAllById(answerIds);
+            }
+            submissionRepo.deleteAllById(submissionIds);
+        }
+
+        List<Long> questionIds = questionRepo.findBySurveyIdOrderByPosition(id)
+                .stream().map(Question::getId).toList();
+        if (!questionIds.isEmpty()) {
+            optionRepo.deleteAll(optionRepo.findByQuestionIdIn(questionIds));
+            questionRepo.deleteAllById(questionIds);
+        }
+
+        surveyRepo.deleteById(id);
+        return ResponseEntity.noContent().build();
     }
 
     // ── Admin: estadísticas de una encuesta ─────────────────────────────────
