@@ -195,14 +195,7 @@ public class SurveyImportService {
     private void saveMultipleOptions(SubmissionAnswer ans, String raw, Question q,
                                       Map<Long, Map<String, QuestionOption>> optsByQ,
                                       SurveyOrigin origin) {
-        List<String> parts;
-        if (origin == SurveyOrigin.MS_FORMS) {
-            parts = Arrays.stream(raw.split(";"))
-                    .map(String::trim).filter(s -> !s.isBlank()).toList();
-        } else {
-            parts = Arrays.stream(raw.split(",\\s+"))
-                    .map(String::trim).filter(s -> !s.isBlank()).toList();
-        }
+        List<String> parts = inference.splitMultiOptions(raw, origin);
 
         Map<String, QuestionOption> opMap = optsByQ.getOrDefault(q.getId(), Map.of());
         for (String part : parts) {

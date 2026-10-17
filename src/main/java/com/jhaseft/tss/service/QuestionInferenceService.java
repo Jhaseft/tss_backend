@@ -194,6 +194,8 @@ public class QuestionInferenceService {
                                    SurveyOrigin origin, int position) {
         String headerNorm = normalize(header);
         List<String> values = collectNonEmpty(header, rows);
+        long distinct = distinctCount(values);
+        double distinctRatio = values.isEmpty() ? 1.0 : (double) distinct / values.size();
 
         // 1. Datos personales: email
         if (isEmailHeader(headerNorm) || isEmail(values)) {
@@ -224,16 +226,15 @@ public class QuestionInferenceService {
             q.setLikertScaleName(matchedScale);
             return q;
         }
-        // 7. Header sugiere campo de texto libre (nombre, descripción, etc.)
-        if (isOpenTextHeader(headerNorm)) {
+        // 7. Header sugiere texto libre — solo si además hay alta variedad de respuestas
+        // (evita falsos positivos en preguntas que mencionan "nombre/descripción" en su texto)
+        if (isOpenTextHeader(headerNorm) && distinctRatio > 0.70) {
             double avgLen7 = values.stream().mapToInt(String::length).average().orElse(0);
             return build(header, avgLen7 > 80 ? QuestionType.TEXT_LONG : QuestionType.TEXT_SHORT,
                     position, List.of(), false);
         }
-        // 8. Alta unicidad → texto libre aunque haya pocos valores
-        long distinct = distinctCount(values);
-        if (values.size() >= 5 && distinct > 0
-                && (double) distinct / values.size() > 0.55) {
+        // 8. Alta unicidad → texto libre (umbral 0.90 para no confundir selección con muchas opciones)
+        if (values.size() >= 5 && distinct > 0 && distinctRatio > 0.90) {
             double avgLen8 = values.stream().mapToInt(String::length).average().orElse(0);
             return build(header, avgLen8 > 80 ? QuestionType.TEXT_LONG : QuestionType.TEXT_SHORT,
                     position, List.of(), false);
@@ -243,7 +244,7 @@ public class QuestionInferenceService {
             List<OptionDef> opts = buildNominalOptions(values);
             return build(header, QuestionType.SINGLE_NOMINAL, position, opts, false);
         }
-        // 10. Texto largo / corto
+        // 10. Texto largo / corto como fallback
         double avgLen = values.stream().mapToInt(String::length).average().orElse(0);
         QuestionType textType = avgLen > 80 ? QuestionType.TEXT_LONG : QuestionType.TEXT_SHORT;
         return build(header, textType, position, List.of(), false);
@@ -288,12 +289,14 @@ public class QuestionInferenceService {
     // ── Helpers de detección ─────────────────────────────────────────────────
 
     private boolean isOpenTextHeader(String n) {
-        return n.contains("nombre") || n.contains("empresa") || n.contains("institucion")
-                || n.contains("organizacion") || n.contains("descripcion") || n.contains("describa")
+        // Solo palabras que identifican el CAMPO como texto libre, no contexto de la pregunta.
+        // "organizacion", "empresa", "institucion", "indique" se omiten porque aparecen
+        // frecuentemente en el texto de preguntas de selección y generan falsos positivos.
+        return n.contains("nombre") || n.contains("descripcion") || n.contains("describa")
                 || n.contains("especifique") || n.contains("especifica") || n.contains("comentario")
                 || n.contains("observacion") || n.contains("sugerencia") || n.contains("otro")
-                || n.contains("cual es") || n.contains("mencione") || n.contains("indique")
-                || n.contains("direccion") || n.contains("ciudad") || n.contains("pais");
+                || n.contains("mencione") || n.contains("direccion") || n.contains("ciudad")
+                || n.contains("pais");
     }
 
     private boolean isEmailHeader(String n) {
@@ -330,7 +333,7 @@ public class QuestionInferenceService {
 
     private boolean isMultipleChoice(String header, List<String> values, SurveyOrigin origin) {
         String headerNorm = normalize(header);
-        // Google Forms: encabezado dice "puede seleccionar" o "seleccione"
+        // Hint explícito en el encabezado (fiable para Google Forms y genérico)
         if (headerNorm.contains("puede seleccionar") || headerNorm.contains("seleccione") || headerNorm.contains("marque")) {
             return true;
         }
@@ -338,9 +341,15 @@ public class QuestionInferenceService {
         if (origin == SurveyOrigin.MS_FORMS) {
             return values.stream().anyMatch(v -> v.contains(";") && v.split(";").length > 1);
         }
-        // Google Forms: algún valor contiene ", " y tiene múltiples fragmentos
+        // Google Forms: detección por valores solo si algún fragmento del split aparece
+        // como valor completo en otra fila (descarta opciones simples que contienen comas).
         if (origin == SurveyOrigin.GOOGLE_FORMS) {
-            return values.stream().anyMatch(v -> v.contains(", ") && v.split(", ").length > 1);
+            Set<String> wholeVals = new HashSet<>(values);
+            return values.stream().anyMatch(v -> {
+                List<String> parts = splitOutsideParens(v);
+                if (parts.size() <= 1) return false;
+                return parts.stream().anyMatch(p -> wholeVals.contains(p.trim()));
+            });
         }
         return false;
     }
@@ -368,24 +377,52 @@ public class QuestionInferenceService {
 
     // ── Construcción de opciones ─────────────────────────────────────────────
 
+    public List<String> splitMultiOptions(String value, SurveyOrigin origin) {
+        if (origin == SurveyOrigin.MS_FORMS) {
+            return Arrays.stream(value.split(";"))
+                    .map(String::trim).filter(s -> !s.isBlank()).toList();
+        }
+        return splitOutsideParens(value);
+    }
+
+    private List<String> splitOutsideParens(String raw) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0, start = 0;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0) {
+                int j = i + 1;
+                if (j < raw.length() && Character.isWhitespace(raw.charAt(j))) {
+                    String part = raw.substring(start, i).trim();
+                    if (!part.isBlank()) parts.add(part);
+                    while (j < raw.length() && Character.isWhitespace(raw.charAt(j))) j++;
+                    start = j;
+                    i = j - 1;
+                }
+            }
+        }
+        String last = raw.substring(start).trim();
+        if (!last.isBlank()) parts.add(last);
+        return parts;
+    }
+
     private List<OptionDef> extractMultipleOptions(List<String> values, SurveyOrigin origin) {
         Map<String, Integer> freq = new LinkedHashMap<>();
+        Map<String, String> bestDisplay = new LinkedHashMap<>();
         for (String v : values) {
             if (v.isBlank()) continue;
-            List<String> parts;
-            if (origin == SurveyOrigin.MS_FORMS) {
-                parts = Arrays.stream(v.split(";")).map(String::trim).filter(s -> !s.isBlank()).toList();
-            } else {
-                parts = Arrays.stream(v.split(",\\s+")).map(String::trim).filter(s -> !s.isBlank()).toList();
-            }
-            for (String part : parts) {
-                freq.merge(normalize(part), 1, Integer::sum);
+            for (String part : splitMultiOptions(v, origin)) {
+                String key = normalize(part);
+                freq.merge(key, 1, Integer::sum);
+                bestDisplay.putIfAbsent(key, part.trim());
             }
         }
         int pos = 0;
         List<OptionDef> opts = new ArrayList<>();
         for (String key : freq.keySet()) {
-            opts.add(new OptionDef(key, capitalize(key), pos++, null));
+            opts.add(new OptionDef(key, bestDisplay.getOrDefault(key, capitalize(key)), pos++, null));
         }
         return opts;
     }
