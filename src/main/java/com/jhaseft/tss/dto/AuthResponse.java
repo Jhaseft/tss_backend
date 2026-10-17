@@ -2,4 +2,4 @@ package com.jhaseft.tss.dto;
 
 import java.util.Set;
 
-public record AuthResponse(String token, String login, Set<String> roles) {}
+public record AuthResponse(String token, String email, Set<String> roles) {}

@@ -38,10 +38,6 @@ public class UserService {
         return userRepository.findById(id);
     }
 
-    public Optional<User> getByLogin(String login) {
-        return userRepository.findByLogin(login);
-    }
-
     public Optional<User> getByEmail(String email) {
         return userRepository.findByEmail(email);
     }
@@ -50,7 +46,6 @@ public class UserService {
     public User create(CreateUserRequest req) {
         User user = new User();
         user.setId(userRepository.findMaxId() + 1);
-        user.setLogin(req.login());
         user.setEmail(req.email());
         user.setPasswordHash(passwordEncoder.encode(req.password()));
         user.setFirstName(req.firstName());

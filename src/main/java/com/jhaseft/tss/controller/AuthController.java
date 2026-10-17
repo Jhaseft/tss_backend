@@ -39,8 +39,8 @@ public class AuthController {
                     Set<String> roles = u.getAuthorities().stream()
                             .map(Authority::getName)
                             .collect(Collectors.toSet());
-                    String token = jwtUtil.generate(u.getLogin(), roles);
-                    return ResponseEntity.ok(new AuthResponse(token, u.getLogin(), roles));
+                    String token = jwtUtil.generate(u.getEmail(), roles);
+                    return ResponseEntity.ok(new AuthResponse(token, u.getEmail(), roles));
                 })
                 .orElse(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
     }
