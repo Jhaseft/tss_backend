@@ -73,13 +73,8 @@ public class SurveyImportService {
         SurveyOrigin origin = inference.detectOrigin(headers);
         String tsColumn = inference.getTimestampColumn(headers, origin);
 
-        // 3. Verificar duplicado por hash del contenido
+        // 3. Hash del contenido (guardado para referencia futura, sin bloquear re-importaciones)
         String hash = sha256(file.getBytes());
-        if (surveyRepo.existsBySourceHash(hash)) {
-            SurveyImportResultDTO dup = new SurveyImportResultDTO();
-            dup.setErrors(List.of("Este archivo ya fue cargado anteriormente."));
-            return dup;
-        }
 
         // 4. Inferir preguntas
         List<InferredQuestion> questions = inference.inferAll(headers, rows, origin);

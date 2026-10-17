@@ -158,7 +158,7 @@ public class SurveyController {
     public ResponseEntity<Map<String, Object>> publicForm(@PathVariable String slug) {
         return surveyRepo.findByPublicSlug(slug).map(survey -> {
             List<Question> questions = questionRepo
-                    .findBySurveyIdAndPersonalDataFalseOrderByPosition(survey.getId());
+                    .findBySurveyIdOrderByPosition(survey.getId());
 
             List<Map<String, Object>> questionList = new ArrayList<>();
             for (Question q : questions) {

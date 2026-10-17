@@ -10,4 +10,6 @@ public interface SurveyRepository extends JpaRepository<Survey, Long> {
     Optional<Survey> findByPublicSlug(String publicSlug);
 
     boolean existsBySourceHash(String sourceHash);
+
+    Optional<Survey> findBySourceHash(String sourceHash);
 }

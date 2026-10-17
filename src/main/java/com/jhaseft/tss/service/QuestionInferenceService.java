@@ -99,7 +99,58 @@ public class QuestionInferenceService {
             }
         }
 
+        // Post-proceso: agrupar LIKERT consecutivos con la misma escala en MATRIX_LIKERT
+        // Solo para MS Forms / Genérico — Google Forms ya usa la detección por [corchetes]
+        if (origin != SurveyOrigin.GOOGLE_FORMS) {
+            groupConsecutiveLikerts(result);
+        }
+
         return result;
+    }
+
+    // ── Agrupación post-proceso de LIKERT consecutivos (MS Forms) ────────────
+
+    private void groupConsecutiveLikerts(List<InferredQuestion> questions) {
+        int n = questions.size();
+        Map<String, Integer> baseCounts = new HashMap<>();
+        int i = 0;
+        while (i < n) {
+            InferredQuestion q = questions.get(i);
+            if (q.getType() != QuestionType.LIKERT || q.getLikertScaleName() == null) {
+                i++;
+                continue;
+            }
+            // Buscar hasta dónde llega el run de LIKERT con la misma escala
+            String scaleName = q.getLikertScaleName();
+            int j = i + 1;
+            while (j < n
+                    && questions.get(j).getType() == QuestionType.LIKERT
+                    && scaleName.equals(questions.get(j).getLikertScaleName())) {
+                j++;
+            }
+            // Solo agrupar si hay ≥2 preguntas consecutivas
+            if (j - i >= 2) {
+                String baseName = scaleName2GroupName(scaleName);
+                int cnt = baseCounts.merge(baseName, 1, Integer::sum);
+                String groupName = cnt == 1 ? baseName : baseName + " " + cnt;
+                for (int k = i; k < j; k++) {
+                    InferredQuestion qi = questions.get(k);
+                    qi.setType(QuestionType.MATRIX_LIKERT);
+                    qi.setMatrixGroupName(groupName);
+                }
+            }
+            i = j;
+        }
+    }
+
+    private String scaleName2GroupName(String scaleName) {
+        if (scaleName == null) return "Bloque Likert";
+        String s = scaleName.toLowerCase();
+        if (s.contains("acuerdo"))   return "Nivel de acuerdo";
+        if (s.contains("satisfac"))  return "Nivel de satisfacción";
+        if (s.contains("importan"))  return "Nivel de importancia";
+        if (s.contains("empleador")) return "Valoración empleadores";
+        return "Bloque Likert";
     }
 
     // ── Filtrado de metadatos ────────────────────────────────────────────────
@@ -173,13 +224,26 @@ public class QuestionInferenceService {
             q.setLikertScaleName(matchedScale);
             return q;
         }
-        // 7. Opción única (pocos valores distintos)
+        // 7. Header sugiere campo de texto libre (nombre, descripción, etc.)
+        if (isOpenTextHeader(headerNorm)) {
+            double avgLen7 = values.stream().mapToInt(String::length).average().orElse(0);
+            return build(header, avgLen7 > 80 ? QuestionType.TEXT_LONG : QuestionType.TEXT_SHORT,
+                    position, List.of(), false);
+        }
+        // 8. Alta unicidad → texto libre aunque haya pocos valores
         long distinct = distinctCount(values);
+        if (values.size() >= 5 && distinct > 0
+                && (double) distinct / values.size() > 0.55) {
+            double avgLen8 = values.stream().mapToInt(String::length).average().orElse(0);
+            return build(header, avgLen8 > 80 ? QuestionType.TEXT_LONG : QuestionType.TEXT_SHORT,
+                    position, List.of(), false);
+        }
+        // 9. Opción única (pocos valores distintos y baja unicidad)
         if (distinct > 0 && distinct <= 15 && values.size() >= 1) {
             List<OptionDef> opts = buildNominalOptions(values);
             return build(header, QuestionType.SINGLE_NOMINAL, position, opts, false);
         }
-        // 8. Texto largo / corto
+        // 10. Texto largo / corto
         double avgLen = values.stream().mapToInt(String::length).average().orElse(0);
         QuestionType textType = avgLen > 80 ? QuestionType.TEXT_LONG : QuestionType.TEXT_SHORT;
         return build(header, textType, position, List.of(), false);
@@ -222,6 +286,15 @@ public class QuestionInferenceService {
     }
 
     // ── Helpers de detección ─────────────────────────────────────────────────
+
+    private boolean isOpenTextHeader(String n) {
+        return n.contains("nombre") || n.contains("empresa") || n.contains("institucion")
+                || n.contains("organizacion") || n.contains("descripcion") || n.contains("describa")
+                || n.contains("especifique") || n.contains("especifica") || n.contains("comentario")
+                || n.contains("observacion") || n.contains("sugerencia") || n.contains("otro")
+                || n.contains("cual es") || n.contains("mencione") || n.contains("indique")
+                || n.contains("direccion") || n.contains("ciudad") || n.contains("pais");
+    }
 
     private boolean isEmailHeader(String n) {
         return n.contains("email") || n.contains("correo") || n.contains("e-mail");
