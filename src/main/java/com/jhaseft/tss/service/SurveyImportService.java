@@ -103,8 +103,7 @@ public class SurveyImportService {
             q.setType(iq.getType());
             q.setPosition(iq.getPosition());
             q.setPersonalData(iq.isPersonalData());
-            q.setMatrixGroup(iq.getMatrixItems().isEmpty() ? null
-                    : String.join("||", iq.getMatrixItems()));
+            q.setMatrixGroup(iq.getMatrixGroupName());
 
             if (iq.getLikertScaleName() != null) {
                 q.setLikertScale(getOrCreateLikertScale(iq.getLikertScaleName(), iq.getOptions()));
@@ -123,11 +122,6 @@ public class SurveyImportService {
             }
 
             colToQuestion.put(iq.getColumnName(), q);
-
-            // Para MATRIX_LIKERT, mapear también cada ítem de columna a la misma pregunta
-            for (String item : iq.getMatrixItems()) {
-                colToQuestion.put(item, q);
-            }
         }
 
         // 7. Precargar opciones por pregunta para dedup en respuestas múltiples
@@ -167,12 +161,6 @@ public class SurveyImportService {
                 Question q = entry.getValue();
                 String raw = row.getOrDefault(colName, "").trim();
 
-                // Para MATRIX_LIKERT, la clave es el ítem individual (columna original)
-                String matrixItemLabel = null;
-                if (q.getType() == QuestionType.MATRIX_LIKERT && !raw.isBlank()) {
-                    matrixItemLabel = cleanItem(colName);
-                }
-
                 SubmissionAnswer ans = new SubmissionAnswer();
                 ans.setSubmission(sub);
                 ans.setQuestion(q);
@@ -189,7 +177,7 @@ public class SurveyImportService {
                             || q.getType() == QuestionType.SINGLE_ORDINAL
                             || q.getType() == QuestionType.LIKERT
                             || q.getType() == QuestionType.MATRIX_LIKERT) {
-                        saveSingleOption(ans, raw, matrixItemLabel, q, optionsByQuestion);
+                        saveSingleOption(ans, raw, q, optionsByQuestion);
                     }
                 }
             }
@@ -239,17 +227,16 @@ public class SurveyImportService {
         }
     }
 
-    private void saveSingleOption(SubmissionAnswer ans, String raw, String matrixLabel,
+    private void saveSingleOption(SubmissionAnswer ans, String raw,
                                    Question q, Map<Long, Map<String, QuestionOption>> optsByQ) {
         Map<String, QuestionOption> opMap = optsByQ.getOrDefault(q.getId(), Map.of());
         String normRaw = inference.normalize(raw);
         QuestionOption opt = opMap.get(normRaw);
-        if (opt == null) return; // valor sin opción conocida (texto libre)
+        if (opt == null) return;
 
         SubmissionAnswerOption sao = new SubmissionAnswerOption();
         sao.setAnswer(ans);
         sao.setOption(opt);
-        if (matrixLabel != null) sao.setFreeText(matrixLabel);
         answerOptionRepo.save(sao);
     }
 

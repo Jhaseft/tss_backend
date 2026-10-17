@@ -88,10 +88,11 @@ public class QuestionInferenceService {
 
             String matrixKey = findMatrixKey(header, matrixGroups);
             if (matrixKey != null) {
-                // Primer ítem del grupo: crear pregunta MATRIX_LIKERT
+                // Un InferredQuestion por ítem para que StatsService pueda construir filas individuales
                 List<String> items = matrixGroups.get(matrixKey);
-                InferredQuestion mq = buildMatrixLikert(matrixKey, items, rows, pos++);
-                result.add(mq);
+                for (String itemHeader : items) {
+                    result.add(buildMatrixLikertItem(matrixKey, itemHeader, pos++));
+                }
                 processedAsMatrix.addAll(items);
             } else {
                 result.add(infer(header, rows, origin, pos++));
@@ -206,18 +207,17 @@ public class QuestionInferenceService {
         return null;
     }
 
-    private InferredQuestion buildMatrixLikert(String groupName, List<String> items,
-                                                List<Map<String, String>> rows, int position) {
+    private InferredQuestion buildMatrixLikertItem(String groupName, String itemHeader, int position) {
         List<OptionDef> likertOpts = buildLikertOptions("Empleadores 3 puntos");
         InferredQuestion q = new InferredQuestion();
-        q.setColumnName(groupName);
-        q.setText(groupName);
+        q.setColumnName(itemHeader);
+        q.setText(cleanHeaderText(itemHeader));
         q.setType(QuestionType.MATRIX_LIKERT);
         q.setPosition(position);
         q.setPersonalData(false);
         q.setOptions(likertOpts);
         q.setLikertScaleName("Empleadores 3 puntos");
-        q.setMatrixItems(items);
+        q.setMatrixGroupName(groupName);
         return q;
     }
 
@@ -414,7 +414,7 @@ public class QuestionInferenceService {
         private boolean personalData;
         private List<OptionDef> options = new ArrayList<>();
         private String likertScaleName;
-        private List<String> matrixItems = new ArrayList<>();
+        private String matrixGroupName;
 
         public String getColumnName() { return columnName; }
         public void setColumnName(String v) { this.columnName = v; }
@@ -437,8 +437,8 @@ public class QuestionInferenceService {
         public String getLikertScaleName() { return likertScaleName; }
         public void setLikertScaleName(String v) { this.likertScaleName = v; }
 
-        public List<String> getMatrixItems() { return matrixItems; }
-        public void setMatrixItems(List<String> v) { this.matrixItems = v; }
+        public String getMatrixGroupName() { return matrixGroupName; }
+        public void setMatrixGroupName(String v) { this.matrixGroupName = v; }
     }
 
     public static class OptionDef {
