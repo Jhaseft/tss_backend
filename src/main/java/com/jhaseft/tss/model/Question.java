@@ -15,10 +15,10 @@ public class Question {
     @JoinColumn(name = "survey_id", nullable = false)
     private Survey survey;
 
-    @Column(name = "column_name", length = 500, nullable = false)
+    @Column(name = "column_name", columnDefinition = "TEXT", nullable = false)
     private String columnName;
 
-    @Column(length = 1000, nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
     private String text;
 
     @Column(length = 255)
@@ -48,7 +48,7 @@ public class Question {
     @JoinColumn(name = "likert_scale_id")
     private LikertScale likertScale;
 
-    @Column(name = "matrix_group", length = 500)
+    @Column(name = "matrix_group", columnDefinition = "TEXT")
     private String matrixGroup;
 
     public Long getId() { return id; }

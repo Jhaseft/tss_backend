@@ -1,8 +1,9 @@
 package com.jhaseft.tss.controller;
 
-import com.jhaseft.tss.dto.SurveyDTO;
-import com.jhaseft.tss.dto.SurveyImportResultDTO;
+import com.jhaseft.tss.dto.*;
 import com.jhaseft.tss.model.Question;
+import com.jhaseft.tss.service.PublicFormService;
+import com.jhaseft.tss.service.StatsService;
 import com.jhaseft.tss.model.QuestionOption;
 import com.jhaseft.tss.repository.QuestionOptionRepository;
 import com.jhaseft.tss.repository.QuestionRepository;
@@ -15,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.NoSuchElementException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,17 +26,23 @@ import java.util.Map;
 public class SurveyController {
 
     private final SurveyImportService importService;
+    private final StatsService statsService;
+    private final PublicFormService publicFormService;
     private final SurveyRepository surveyRepo;
     private final SubmissionRepository submissionRepo;
     private final QuestionRepository questionRepo;
     private final QuestionOptionRepository optionRepo;
 
     public SurveyController(SurveyImportService importService,
+                             StatsService statsService,
+                             PublicFormService publicFormService,
                              SurveyRepository surveyRepo,
                              SubmissionRepository submissionRepo,
                              QuestionRepository questionRepo,
                              QuestionOptionRepository optionRepo) {
         this.importService = importService;
+        this.statsService = statsService;
+        this.publicFormService = publicFormService;
         this.surveyRepo = surveyRepo;
         this.submissionRepo = submissionRepo;
         this.questionRepo = questionRepo;
@@ -97,6 +105,17 @@ public class SurveyController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    // ── Admin: estadísticas de una encuesta ─────────────────────────────────
+
+    @GetMapping("/surveys/{id}/stats")
+    public ResponseEntity<SurveyStatsDTO> stats(@PathVariable Long id) {
+        try {
+            return ResponseEntity.ok(statsService.compute(id));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
     // ── Público: estructura del formulario (sin datos de otros respondentes) ─
 
     @GetMapping("/public/surveys/{slug}")
@@ -113,6 +132,8 @@ public class SurveyController {
                 qMap.put("type", q.getType().name());
                 qMap.put("position", q.getPosition());
                 qMap.put("required", !q.isPersonalData());
+                if (q.getSection() != null) qMap.put("section", q.getSection());
+                if (q.getMatrixGroup() != null) qMap.put("matrixGroup", q.getMatrixGroup());
 
                 if (q.getParentQuestion() != null) {
                     qMap.put("parentQuestionId", q.getParentQuestion().getId());
@@ -139,5 +160,22 @@ public class SurveyController {
             return ResponseEntity.ok(body);
 
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // ── Público: enviar respuestas ────────────────────────────────────────────
+
+    @PostMapping("/public/surveys/{slug}/respond")
+    public ResponseEntity<Map<String, Object>> respond(
+            @PathVariable String slug,
+            @RequestBody SurveyResponseDTO body) {
+        try {
+            Long subId = publicFormService.saveResponse(slug, body.getAnswers());
+            return ResponseEntity.ok(Map.of("submissionId", subId, "status", "ok"));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage() != null ? e.getMessage() : "Error interno"));
+        }
     }
 }

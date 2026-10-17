@@ -15,10 +15,10 @@ public class QuestionOption {
     @JoinColumn(name = "question_id", nullable = false)
     private Question question;
 
-    @Column(length = 500, nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
     private String value;
 
-    @Column(name = "display_text", length = 500, nullable = false)
+    @Column(name = "display_text", columnDefinition = "TEXT", nullable = false)
     private String displayText;
 
     @Column(nullable = false)
