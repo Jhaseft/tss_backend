@@ -378,11 +378,31 @@ public class QuestionInferenceService {
     // ── Construcción de opciones ─────────────────────────────────────────────
 
     public List<String> splitMultiOptions(String value, SurveyOrigin origin) {
+        String trimmed = value == null ? "" : value.trim();
+        // MS Forms a veces exporta la selección múltiple como arreglo JSON: ["A","B"]
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            List<String> arr = parseJsonArray(trimmed);
+            if (!arr.isEmpty()) return arr;
+        }
         if (origin == SurveyOrigin.MS_FORMS) {
             return Arrays.stream(value.split(";"))
                     .map(String::trim).filter(s -> !s.isBlank()).toList();
         }
         return splitOutsideParens(value);
+    }
+
+    private List<String> parseJsonArray(String raw) {
+        String inner = raw.substring(1, raw.length() - 1);
+        List<String> parts = new ArrayList<>();
+        for (String piece : inner.split(",")) {
+            String p = piece.trim();
+            if (p.length() >= 2 && p.startsWith("\"") && p.endsWith("\"")) {
+                p = p.substring(1, p.length() - 1);
+            }
+            p = p.trim();
+            if (!p.isBlank()) parts.add(p);
+        }
+        return parts;
     }
 
     private List<String> splitOutsideParens(String raw) {
@@ -494,7 +514,9 @@ public class QuestionInferenceService {
                 .toLowerCase()
                 .replace("\n", " ")
                 .replace("\r", " ")
+                .replace(" ", " ")   // NBSP (espacio duro de Forms) -> espacio normal
                 .replaceAll("\\s+", " ")
+                .trim()
                 .replace("á", "a").replace("é", "e").replace("í", "i")
                 .replace("ó", "o").replace("ú", "u").replace("ü", "u")
                 .replace("ñ", "n").replace("à", "a").replace("è", "e");
