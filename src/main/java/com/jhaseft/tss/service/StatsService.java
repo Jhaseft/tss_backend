@@ -110,6 +110,7 @@ public class StatsService {
             case LIKERT -> {
                 dto.setDistribution(freqTable(values, opts, values.size()));
                 dto.setMean(meanFromOpts(values, opts));
+                dto.setStdDev(stdDevFromOpts(values, opts));
             }
             case NUMERIC -> buildNumeric(dto, values);
             default -> dto.setSampleResponses(values.stream().limit(10).toList());
@@ -135,6 +136,7 @@ public class StatsService {
             item.setQuestionId(q.getId());
             item.setText(q.getText());
             item.setMean(meanFromOpts(values, opts));
+            item.setStdDev(stdDevFromOpts(values, opts));
             item.setDistribution(freqTable(values, opts, values.size()));
             return item;
         }).toList();
@@ -215,5 +217,23 @@ public class StatsService {
                 .map(v -> byVal.containsKey(v) ? byVal.get(v) : byDisp.get(v))
                 .filter(Objects::nonNull).mapToDouble(Double::doubleValue).average();
         return avg.isPresent() ? avg.getAsDouble() : null;
+    }
+
+    // Desviación estándar poblacional de los valores Likert mapeados a su número.
+    private Double stdDevFromOpts(List<String> values, List<QuestionOption> opts) {
+        if (opts.isEmpty() || values.isEmpty()) return null;
+        Map<String, Double> byVal = opts.stream().filter(o -> o.getNumericValue() != null)
+                .collect(Collectors.toMap(QuestionOption::getValue,
+                        o -> o.getNumericValue().doubleValue(), (a, b) -> a));
+        Map<String, Double> byDisp = opts.stream().filter(o -> o.getNumericValue() != null)
+                .collect(Collectors.toMap(QuestionOption::getDisplayText,
+                        o -> o.getNumericValue().doubleValue(), (a, b) -> a));
+        double[] nums = values.stream()
+                .map(v -> byVal.containsKey(v) ? byVal.get(v) : byDisp.get(v))
+                .filter(Objects::nonNull).mapToDouble(Double::doubleValue).toArray();
+        if (nums.length < 2) return null;
+        double mean = Arrays.stream(nums).average().orElse(0);
+        double var = Arrays.stream(nums).map(d -> Math.pow(d - mean, 2)).average().orElse(0);
+        return Math.sqrt(var);
     }
 }
