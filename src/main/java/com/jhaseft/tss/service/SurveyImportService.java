@@ -72,11 +72,22 @@ public class SurveyImportService {
         SurveyOrigin origin = survey.getOrigin();
         String tsColumn = inference.getTimestampColumn(parsed.getHeaders(), origin);
 
+        // Excluye columnas de metadatos (ID, Puntos:, Comentarios:, etc.). Sin esto, en
+        // MS Forms las columnas "Puntos: <pregunta>" y "Comentarios: <pregunta>" contienen
+        // el texto de la pregunta y el matcher difuso las asignaba a la misma pregunta,
+        // creando 2-3 respuestas por persona e inflando el n de las estadísticas.
+        List<String> questionHeaders = inference.filterMetadata(parsed.getHeaders(), origin);
+
         Map<String, Question> colToQuestion = new LinkedHashMap<>();
-        for (String header : parsed.getHeaders()) {
+        Set<Long> usedQuestions = new HashSet<>();
+        for (String header : questionHeaders) {
             if (header.equals(tsColumn)) continue;
             Question q = matchQuestion(header, normIndex);
-            if (q != null) colToQuestion.put(header, q);
+            // Una sola columna por pregunta: evita duplicar respuestas si dos encabezados
+            // casi idénticos apuntan a la misma pregunta.
+            if (q != null && usedQuestions.add(q.getId())) {
+                colToQuestion.put(header, q);
+            }
         }
 
         Map<Long, Map<String, QuestionOption>> optionsByQuestion = new HashMap<>();
