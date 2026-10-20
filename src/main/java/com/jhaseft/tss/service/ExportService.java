@@ -22,17 +22,20 @@ public class ExportService {
     private final QuestionOptionRepository optionRepo;
     private final SubmissionRepository submissionRepo;
     private final SubmissionAnswerRepository answerRepo;
+    private final QuestionInferenceService inference;
 
     public ExportService(SurveyRepository surveyRepo,
                           QuestionRepository questionRepo,
                           QuestionOptionRepository optionRepo,
                           SubmissionRepository submissionRepo,
-                          SubmissionAnswerRepository answerRepo) {
+                          SubmissionAnswerRepository answerRepo,
+                          QuestionInferenceService inference) {
         this.surveyRepo = surveyRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
         this.submissionRepo = submissionRepo;
         this.answerRepo = answerRepo;
+        this.inference = inference;
     }
 
     @Transactional(readOnly = true)
@@ -69,7 +72,7 @@ public class ExportService {
             CellStyle numStyle = numStyle(wb);
 
             buildRawSheet(wb, survey, questions, submissions, qSubValue, headerStyle, titleStyle);
-            buildFreqSheet(wb, survey, questions, answersByQ, optsByQ, headerStyle, titleStyle, numStyle);
+            buildFreqSheet(wb, survey, questions, answersByQ, optsByQ, headerStyle, titleStyle, numStyle, survey.getOrigin());
             buildLikertSheet(wb, survey, questions, answersByQ, optsByQ, headerStyle, titleStyle, numStyle);
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -122,7 +125,8 @@ public class ExportService {
                                   List<Question> questions,
                                   Map<Long, List<SubmissionAnswer>> answersByQ,
                                   Map<Long, List<QuestionOption>> optsByQ,
-                                  CellStyle header, CellStyle title, CellStyle num) {
+                                  CellStyle header, CellStyle title, CellStyle num,
+                                  SurveyOrigin origin) {
         Set<QuestionType> catTypes = Set.of(
                 QuestionType.SINGLE_NOMINAL, QuestionType.SINGLE_ORDINAL,
                 QuestionType.MULTIPLE_CHOICE, QuestionType.LIKERT, QuestionType.MATRIX_LIKERT);
@@ -154,7 +158,13 @@ public class ExportService {
             cell(hdr, 2, "Porcentaje (%)", header);
 
             List<QuestionOption> opts = optsByQ.getOrDefault(q.getId(), List.of());
-            Map<String, Long> counts = values.stream()
+            // En selección múltiple hay que separar cada respuesta en sus opciones
+            // (respetando comas dentro de paréntesis) antes de contar.
+            List<String> countValues = q.getType() == QuestionType.MULTIPLE_CHOICE
+                    ? values.stream().flatMap(v -> inference.splitMultiOptions(v, origin).stream())
+                            .map(String::trim).filter(s -> !s.isBlank()).toList()
+                    : values;
+            Map<String, Long> counts = countValues.stream()
                     .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
 
             List<Map.Entry<String, Long>> entries;

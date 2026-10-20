@@ -19,6 +19,7 @@ public class QuestionStatsDTO {
 
     private List<MatrixItemStatsDTO> matrixItems;
     private List<String> sampleResponses;
+    private List<FrequencyEntryDTO> keywords;
 
     public Long getQuestionId() { return questionId; }
     public void setQuestionId(Long questionId) { this.questionId = questionId; }
@@ -61,4 +62,7 @@ public class QuestionStatsDTO {
 
     public List<String> getSampleResponses() { return sampleResponses; }
     public void setSampleResponses(List<String> sampleResponses) { this.sampleResponses = sampleResponses; }
+
+    public List<FrequencyEntryDTO> getKeywords() { return keywords; }
+    public void setKeywords(List<FrequencyEntryDTO> keywords) { this.keywords = keywords; }
 }

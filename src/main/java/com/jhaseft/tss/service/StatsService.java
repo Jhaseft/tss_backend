@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -18,17 +19,20 @@ public class StatsService {
     private final QuestionOptionRepository optionRepo;
     private final SubmissionRepository submissionRepo;
     private final SubmissionAnswerRepository answerRepo;
+    private final QuestionInferenceService inference;
 
     public StatsService(SurveyRepository surveyRepo,
                         QuestionRepository questionRepo,
                         QuestionOptionRepository optionRepo,
                         SubmissionRepository submissionRepo,
-                        SubmissionAnswerRepository answerRepo) {
+                        SubmissionAnswerRepository answerRepo,
+                        QuestionInferenceService inference) {
         this.surveyRepo = surveyRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
         this.submissionRepo = submissionRepo;
         this.answerRepo = answerRepo;
+        this.inference = inference;
     }
 
     @Transactional(readOnly = true)
@@ -72,7 +76,8 @@ public class StatsService {
                 processed.add(q.getId());
                 stats.add(buildQuestion(q,
                         answersByQuestion.getOrDefault(q.getId(), List.of()),
-                        optsByQuestion.getOrDefault(q.getId(), List.of())));
+                        optsByQuestion.getOrDefault(q.getId(), List.of()),
+                        survey.getOrigin()));
             }
         }
 
@@ -87,7 +92,8 @@ public class StatsService {
 
     private QuestionStatsDTO buildQuestion(Question q,
                                             List<SubmissionAnswer> answers,
-                                            List<QuestionOption> opts) {
+                                            List<QuestionOption> opts,
+                                            SurveyOrigin origin) {
         QuestionStatsDTO dto = new QuestionStatsDTO();
         dto.setQuestionId(q.getId());
         dto.setText(q.getText());
@@ -102,8 +108,11 @@ public class StatsService {
             case SINGLE_NOMINAL, SINGLE_ORDINAL ->
                 dto.setDistribution(freqTable(values, opts, values.size()));
             case MULTIPLE_CHOICE -> {
+                // Usa el mismo separador que el import (respeta comas dentro de
+                // paréntesis en Google y ';' en MS Forms) para no partir opciones como
+                // "Técnico (desarrollo de software, administración...)" y dar 0%.
                 List<String> exploded = values.stream()
-                        .flatMap(v -> Arrays.stream(v.split("[;,]\\s*")))
+                        .flatMap(v -> inference.splitMultiOptions(v, origin).stream())
                         .map(String::trim).filter(s -> !s.isBlank()).toList();
                 dto.setDistribution(freqTable(exploded, opts, values.size()));
             }
@@ -113,9 +122,57 @@ public class StatsService {
                 dto.setStdDev(stdDevFromOpts(values, opts));
             }
             case NUMERIC -> buildNumeric(dto, values);
+            case TEXT_LONG -> {
+                dto.setSampleResponses(values.stream().limit(10).toList());
+                dto.setKeywords(extractKeywords(values));
+            }
             default -> dto.setSampleResponses(values.stream().limit(10).toList());
         }
         return dto;
+    }
+
+    // ── Extracción de palabras clave para preguntas abiertas (TEXT_LONG) ──────
+    // Agrupa menciones por tema (sinónimos) y cuenta cuántas RESPUESTAS mencionan
+    // cada tema. Sirve para visualizar tendencias en texto libre (áreas, herramientas,
+    // competencias) sin leer una por una. Los valores ya vienen normalizados
+    // (minúsculas y sin tildes), por eso los patrones se escriben así.
+    private static final Map<String, Pattern> KEYWORD_GROUPS = new LinkedHashMap<>();
+    static {
+        KEYWORD_GROUPS.put("IA / Agentes", Pattern.compile("\\bia\\b|\\bai\\b|inteligencia artif|inteligente artif|machine learning|maching learning|\\bmlops\\b|\\bml\\b|\\bllm|prompt|agentic|agentes|deep learning|redes neuronales"));
+        KEYWORD_GROUPS.put("Ciberseguridad", Pattern.compile("ciberseguridad|ciber seguridad|seguridad inform|seguridad de sistemas|seguridad|forense|forence|pentest|hacking"));
+        KEYWORD_GROUPS.put("Ciencia de Datos", Pattern.compile("ciencia de datos|analisis de datos|analisis se datos|big data|data warehouse|ingenier[oa]s de datos|analitica|\\bdatos\\b|\\bbi\\b|business intelligence|power bi|tableau"));
+        KEYWORD_GROUPS.put("Automatización / IoT", Pattern.compile("automatizacion|\\biot\\b|internet de las cosas|\\brpa\\b|robotica"));
+        KEYWORD_GROUPS.put("Cloud", Pattern.compile("\\bcloud\\b|\\bnube\\b|computacion en la nube|\\baws\\b|\\bazure\\b|\\bgcp\\b"));
+        KEYWORD_GROUPS.put("DevOps", Pattern.compile("devops|docker|kubernetes|ci/cd|jenkins|terraform"));
+        KEYWORD_GROUPS.put("Desarrollo Web/Móvil", Pattern.compile("\\breact\\b|angular|\\bvue\\b|node|flutter|desarrollo web|desarrollo movil|programacion movil|\\bapi\\b|microservicios|laravel|spring|\\bnest\\b"));
+        KEYWORD_GROUPS.put("Bases de Datos", Pattern.compile("base de datos|bases de datos|\\bsql\\b|postgres|mongo"));
+        KEYWORD_GROUPS.put("Lenguajes de programación", Pattern.compile("\\bpython\\b|\\bjava\\b|javascript|\\bc\\+\\+|\\bc#|\\bgo\\b"));
+        KEYWORD_GROUPS.put("Blockchain", Pattern.compile("blockchain|solidity|web3"));
+        KEYWORD_GROUPS.put("Trabajo en equipo", Pattern.compile("trabajo en equipo|colaboracion|equipos multidisc"));
+        KEYWORD_GROUPS.put("Comunicación", Pattern.compile("comunicacion"));
+        KEYWORD_GROUPS.put("Resolución de problemas", Pattern.compile("resolucion de problemas|solucion de problemas|pensamiento critico|analitic"));
+        KEYWORD_GROUPS.put("Liderazgo / Gestión", Pattern.compile("liderazgo|gestion de proyectos|\\blider"));
+        KEYWORD_GROUPS.put("Aprendizaje continuo", Pattern.compile("aprendizaje continuo|adaptab|actualizacion|autoaprendizaje"));
+        KEYWORD_GROUPS.put("Inglés", Pattern.compile("\\bingles\\b|idioma"));
+        KEYWORD_GROUPS.put("Habilidades blandas", Pattern.compile("habilidades blandas|soft skills|competencias blandas"));
+    }
+
+    private List<FrequencyEntryDTO> extractKeywords(List<String> values) {
+        if (values.isEmpty()) return List.of();
+        int total = values.size();
+        List<FrequencyEntryDTO> out = new ArrayList<>();
+        for (Map.Entry<String, Pattern> g : KEYWORD_GROUPS.entrySet()) {
+            long c = values.stream().filter(v -> g.getValue().matcher(v).find()).count();
+            if (c > 0) {
+                FrequencyEntryDTO f = new FrequencyEntryDTO();
+                f.setLabel(g.getKey());
+                f.setCount(c);
+                f.setPercentage(c * 100.0 / total);
+                out.add(f);
+            }
+        }
+        out.sort((a, b) -> Long.compare(b.getCount(), a.getCount()));
+        return out.size() > 12 ? new ArrayList<>(out.subList(0, 12)) : out;
     }
 
     private QuestionStatsDTO buildMatrix(String groupName,
