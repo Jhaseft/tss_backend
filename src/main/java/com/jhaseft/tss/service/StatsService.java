@@ -3,6 +3,7 @@ package com.jhaseft.tss.service;
 import com.jhaseft.tss.dto.*;
 import com.jhaseft.tss.model.*;
 import com.jhaseft.tss.repository.*;
+import com.jhaseft.tss.service.parsing.NumericAnswerParser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,19 +21,25 @@ public class StatsService {
     private final SubmissionRepository submissionRepo;
     private final SubmissionAnswerRepository answerRepo;
     private final QuestionInferenceService inference;
+    private final NumericAnswerParser numericParser;
+
+    // Rango aceptado para las preguntas numéricas (vida profesional / desempleo): 0–45 años.
+    private static final double NUM_MIN = 0, NUM_MAX = 45;
 
     public StatsService(SurveyRepository surveyRepo,
                         QuestionRepository questionRepo,
                         QuestionOptionRepository optionRepo,
                         SubmissionRepository submissionRepo,
                         SubmissionAnswerRepository answerRepo,
-                        QuestionInferenceService inference) {
+                        QuestionInferenceService inference,
+                        NumericAnswerParser numericParser) {
         this.surveyRepo = surveyRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
         this.submissionRepo = submissionRepo;
         this.answerRepo = answerRepo;
         this.inference = inference;
+        this.numericParser = numericParser;
     }
 
     @Transactional(readOnly = true)
@@ -77,7 +84,8 @@ public class StatsService {
                 stats.add(buildQuestion(q,
                         answersByQuestion.getOrDefault(q.getId(), List.of()),
                         optsByQuestion.getOrDefault(q.getId(), List.of()),
-                        survey.getOrigin()));
+                        survey.getOrigin(),
+                        submissions.size()));
             }
         }
 
@@ -93,7 +101,8 @@ public class StatsService {
     private QuestionStatsDTO buildQuestion(Question q,
                                             List<SubmissionAnswer> answers,
                                             List<QuestionOption> opts,
-                                            SurveyOrigin origin) {
+                                            SurveyOrigin origin,
+                                            int totalSubmissions) {
         QuestionStatsDTO dto = new QuestionStatsDTO();
         dto.setQuestionId(q.getId());
         dto.setText(q.getText());
@@ -103,25 +112,32 @@ public class StatsService {
 
         List<String> values = answered(answers);
         dto.setTotalAnswered(values.size());
+        // Sin respuesta: quienes no dieron ningún valor. La separación fina entre filtro
+        // condicional y "debía responder y no lo hizo" corresponde al reporte de depuración
+        // (punto 3); aquí es el total de no respondidas de la pregunta.
+        dto.setNoResponseCount(Math.max(0, totalSubmissions - values.size()));
 
         switch (q.getType()) {
             case SINGLE_NOMINAL, SINGLE_ORDINAL ->
-                dto.setDistribution(freqTable(values, opts, values.size()));
+                // % sobre el n válido (respuestas que caen en una opción) → suman 100%.
+                dto.setDistribution(freqTable(values, opts, matchedTotal(values, opts)));
             case MULTIPLE_CHOICE -> {
                 // Usa el mismo separador que el import (respeta comas dentro de
                 // paréntesis en Google y ';' en MS Forms) para no partir opciones como
                 // "Técnico (desarrollo de software, administración...)" y dar 0%.
+                // El denominador es el nº de encuestados (no la suma de opciones), porque
+                // una persona puede marcar varias → los % no suman 100.
                 List<String> exploded = values.stream()
                         .flatMap(v -> inference.splitMultiOptions(v, origin).stream())
                         .map(String::trim).filter(s -> !s.isBlank()).toList();
                 dto.setDistribution(freqTable(exploded, opts, values.size()));
             }
             case LIKERT -> {
-                dto.setDistribution(freqTable(values, opts, values.size()));
+                dto.setDistribution(freqTable(values, opts, matchedTotal(values, opts)));
                 dto.setMean(meanFromOpts(values, opts));
                 dto.setStdDev(stdDevFromOpts(values, opts));
             }
-            case NUMERIC -> buildNumeric(dto, values);
+            case NUMERIC -> buildNumeric(dto, rawAnswered(answers));
             case TEXT_LONG -> {
                 dto.setSampleResponses(values.stream().limit(10).toList());
                 dto.setKeywords(extractKeywords(values));
@@ -194,7 +210,7 @@ public class StatsService {
             item.setText(q.getText());
             item.setMean(meanFromOpts(values, opts));
             item.setStdDev(stdDevFromOpts(values, opts));
-            item.setDistribution(freqTable(values, opts, values.size()));
+            item.setDistribution(freqTable(values, opts, matchedTotal(values, opts)));
             return item;
         }).toList();
 
@@ -206,18 +222,34 @@ public class StatsService {
         return dto;
     }
 
-    private void buildNumeric(QuestionStatsDTO dto, List<String> values) {
-        List<Double> nums = values.stream()
-                .map(v -> { try { return Double.parseDouble(v.replace(",", ".")); } catch (Exception e) { return null; } })
-                .filter(Objects::nonNull).sorted().toList();
+    // Estadística numérica robusta: cada crudo pasa por el NumericAnswerParser (convierte
+    // "5 años", "6 meses", "1,5", "Nada"; descarta "Gjvu", vacíos y fuera de rango). n = nº
+    // de valores válidos; varianza y DE MUESTRALES (n − 1) como pide el informe.
+    private void buildNumeric(QuestionStatsDTO dto, List<String> rawValues) {
+        List<Double> nums = new ArrayList<>();
+        int invalid = 0;
+        for (String raw : rawValues) {
+            NumericParseResultDTO r = numericParser.parse(raw, NUM_MIN, NUM_MAX);
+            if (r.isValid() && r.getNumericValue() != null) nums.add(r.getNumericValue());
+            else invalid++;
+        }
+        Collections.sort(nums);
+
+        dto.setTotalAnswered(nums.size());                 // n = válidos (p.ej. 145)
+        dto.setNoResponseCount(invalid);                    // crudos no interpretables / fuera de rango
         if (nums.isEmpty()) return;
+
         double mean = nums.stream().mapToDouble(d -> d).average().orElse(0);
         dto.setMean(mean);
-        dto.setStdDev(Math.sqrt(nums.stream().mapToDouble(d -> Math.pow(d - mean, 2)).average().orElse(0)));
+        if (nums.size() >= 2) {
+            double var = nums.stream().mapToDouble(d -> (d - mean) * (d - mean)).sum()
+                    / (nums.size() - 1);            // varianza muestral
+            dto.setStdDev(Math.sqrt(var));
+        }
         dto.setMin(nums.get(0));
         dto.setMax(nums.get(nums.size() - 1));
-        int mid = nums.size() / 2;
-        dto.setMedian(nums.size() % 2 == 0 ? (nums.get(mid - 1) + nums.get(mid)) / 2.0 : nums.get(mid));
+        int n = nums.size(), mid = n / 2;
+        dto.setMedian(n % 2 == 0 ? (nums.get(mid - 1) + nums.get(mid)) / 2.0 : nums.get(mid));
     }
 
     private List<String> answered(List<SubmissionAnswer> answers) {
@@ -227,6 +259,26 @@ public class StatsService {
                         && !a.getNormalizedValue().isBlank())
                 .map(SubmissionAnswer::getNormalizedValue)
                 .toList();
+    }
+
+    // Valores CRUDOS de las respuestas dadas (sin normalizar), para que el parser numérico
+    // vea el texto original ("1,5", "5 años") antes de cualquier limpieza.
+    private List<String> rawAnswered(List<SubmissionAnswer> answers) {
+        return answers.stream()
+                .filter(a -> !a.isNotApplicable()
+                        && a.getRawValue() != null
+                        && !a.getRawValue().isBlank())
+                .map(SubmissionAnswer::getRawValue)
+                .toList();
+    }
+
+    // n válido de una pregunta de opción: respuestas que caen en alguna opción conocida.
+    // Es el denominador correcto para que los % de opción única sumen 100%.
+    private int matchedTotal(List<String> values, List<QuestionOption> opts) {
+        if (opts.isEmpty()) return values.size();
+        Set<String> keys = new HashSet<>();
+        for (QuestionOption o : opts) { keys.add(o.getValue()); keys.add(o.getDisplayText()); }
+        return (int) values.stream().filter(keys::contains).count();
     }
 
     private List<FrequencyEntryDTO> freqTable(List<String> values,

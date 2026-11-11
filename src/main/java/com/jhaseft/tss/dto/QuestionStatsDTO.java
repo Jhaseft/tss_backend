@@ -9,6 +9,7 @@ public class QuestionStatsDTO {
     private String section;
     private Integer position;
     private Integer totalAnswered;
+    private Integer noResponseCount;
 
     private List<FrequencyEntryDTO> distribution;
     private Double mean;
@@ -38,6 +39,9 @@ public class QuestionStatsDTO {
 
     public Integer getTotalAnswered() { return totalAnswered; }
     public void setTotalAnswered(Integer totalAnswered) { this.totalAnswered = totalAnswered; }
+
+    public Integer getNoResponseCount() { return noResponseCount; }
+    public void setNoResponseCount(Integer noResponseCount) { this.noResponseCount = noResponseCount; }
 
     public List<FrequencyEntryDTO> getDistribution() { return distribution; }
     public void setDistribution(List<FrequencyEntryDTO> distribution) { this.distribution = distribution; }
