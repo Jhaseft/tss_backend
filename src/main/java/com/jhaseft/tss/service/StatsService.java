@@ -50,8 +50,11 @@ public class StatsService {
         List<Submission> submissions = submissionRepo.findBySurveyId(surveyId);
         List<Long> submissionIds = submissions.stream().map(Submission::getId).toList();
 
+        // Se incluyen TODAS las preguntas de la encuesta en el orden de la encuesta
+        // (por posición), sin ocultar las marcadas como datos personales, para que el
+        // dashboard muestre la encuesta completa.
         List<Question> questions = questionRepo
-                .findBySurveyIdAndPersonalDataFalseOrderByPosition(surveyId);
+                .findBySurveyIdOrderByPosition(surveyId);
         List<Long> questionIds = questions.stream().map(Question::getId).toList();
 
         Map<Long, List<SubmissionAnswer>> answersByQuestion = submissionIds.isEmpty()
