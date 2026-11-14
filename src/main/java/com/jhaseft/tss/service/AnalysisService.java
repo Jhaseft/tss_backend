@@ -1,9 +1,10 @@
 package com.jhaseft.tss.service;
 
+import com.jhaseft.tss.dto.ChiSquareResultDTO;
 import com.jhaseft.tss.dto.CrossTabResultDTO;
 import com.jhaseft.tss.model.*;
 import com.jhaseft.tss.repository.*;
-import org.apache.commons.math3.stat.inference.ChiSquareTest;
+import com.jhaseft.tss.service.stats.ChiSquareService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,15 +18,18 @@ public class AnalysisService {
     private final QuestionOptionRepository optionRepo;
     private final SubmissionRepository submissionRepo;
     private final SubmissionAnswerRepository answerRepo;
+    private final ChiSquareService chiSquareService;
 
     public AnalysisService(QuestionRepository questionRepo,
                            QuestionOptionRepository optionRepo,
                            SubmissionRepository submissionRepo,
-                           SubmissionAnswerRepository answerRepo) {
+                           SubmissionAnswerRepository answerRepo,
+                           ChiSquareService chiSquareService) {
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
         this.submissionRepo = submissionRepo;
         this.answerRepo = answerRepo;
+        this.chiSquareService = chiSquareService;
     }
 
     @Transactional(readOnly = true)
@@ -84,30 +88,6 @@ public class AnalysisService {
             for (int c = 0; c < C; c++)
                 rowPct[r][c] = rowTotals[r] > 0 ? obs[r][c] * 100.0 / rowTotals[r] : 0.0;
 
-        // Chi-square
-        boolean canTest = R >= 2 && C >= 2 && n > 0 && lowExpectedPct(obs, rowTotals, colTotals, n) <= 20;
-        double chiSq = 0, pValue = 1;
-        String warning = null;
-
-        if (canTest) {
-            ChiSquareTest cst = new ChiSquareTest();
-            chiSq = cst.chiSquare(obs);
-            pValue = cst.chiSquareTest(obs);
-        } else {
-            warning = R < 2 || C < 2
-                    ? "Se necesitan al menos 2 categorías en cada variable."
-                    : "Más del 20% de celdas tienen frecuencia esperada < 5. Resultado orientativo.";
-            if (n > 0 && R >= 2 && C >= 2) {
-                // Still compute even with warning
-                ChiSquareTest cst = new ChiSquareTest();
-                try { chiSq = cst.chiSquare(obs); pValue = cst.chiSquareTest(obs); } catch (Exception ignored) {}
-            }
-        }
-
-        int df = Math.max(0, (R - 1) * (C - 1));
-        double cramersV = n > 0 && Math.min(R, C) > 1
-                ? Math.sqrt(chiSq / ((double) n * (Math.min(R, C) - 1))) : 0;
-
         CrossTabResultDTO result = new CrossTabResultDTO();
         result.setQuestionId1(qId1);
         result.setQuestionText1(q1.getText());
@@ -120,12 +100,34 @@ public class AnalysisService {
         result.setRowTotals(rowTotals);
         result.setColTotals(colTotals);
         result.setN(n);
-        result.setChiSquare(chiSq);
-        result.setDegreesOfFreedom(df);
-        result.setPValue(pValue);
-        result.setCramersV(cramersV);
-        result.setSignificant(pValue < 0.05);
-        result.setWarning(warning);
+
+        if (R < 2 || C < 2 || n == 0) {
+            result.setWarning("Se necesitan al menos 2 categorías con respuestas en cada variable.");
+            return result;
+        }
+
+        // χ², esperadas, Cochran, Fisher y V de Cramér salen de la misma tabla (punto 7).
+        ChiSquareResultDTO chi = chiSquareService.test(obs);
+        result.setChiSquare(chi.getChiSquare());
+        result.setDegreesOfFreedom(chi.getDegreesOfFreedom());
+        result.setPValue(chi.getPValue());
+        result.setCramersV(chi.getCramersV());
+        result.setCramersK(chi.getCramersK());
+        result.setCramersVLevel(chi.getCramersVLevel());
+        result.setExpected(chi.getExpected());
+        result.setLowExpectedCells(chi.getLowExpectedCells());
+        result.setTotalCells(chi.getTotalCells());
+        result.setLowExpectedPct(chi.getLowExpectedPct());
+        result.setAnyExpectedBelow1(chi.isAnyExpectedBelow1());
+        result.setCochranOk(chi.isCochranOk());
+        result.setFisherP(chi.getFisherP());
+        result.setSignificant(chi.getPValue() < 0.05);
+        if (!chi.isCochranOk())
+            result.setWarning(String.format(
+                    "Supuesto de Cochran no cumplido: %.0f%% de celdas con E < 5%s. Resultado orientativo%s.",
+                    chi.getLowExpectedPct(),
+                    chi.isAnyExpectedBelow1() ? " (alguna < 1)" : "",
+                    chi.getFisherP() != null ? "; usar Fisher" : "; agrupar categorías"));
         return result;
     }
 
@@ -156,13 +158,5 @@ public class AnalysisService {
             for (int i = 0; i < labels.size(); i++) idx.put(labels.get(i), i);
         }
         return idx;
-    }
-
-    private double lowExpectedPct(long[][] obs, long[] rowTotals, long[] colTotals, long n) {
-        int R = obs.length, C = obs[0].length, low = 0;
-        for (int r = 0; r < R; r++)
-            for (int c = 0; c < C; c++)
-                if ((double) rowTotals[r] * colTotals[c] / n < 5) low++;
-        return low * 100.0 / (R * C);
     }
 }

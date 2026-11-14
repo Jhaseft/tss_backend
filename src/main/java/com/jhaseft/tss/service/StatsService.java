@@ -4,6 +4,7 @@ import com.jhaseft.tss.dto.*;
 import com.jhaseft.tss.model.*;
 import com.jhaseft.tss.repository.*;
 import com.jhaseft.tss.service.parsing.NumericAnswerParser;
+import com.jhaseft.tss.service.stats.DescriptiveStatsService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +23,7 @@ public class StatsService {
     private final SubmissionAnswerRepository answerRepo;
     private final QuestionInferenceService inference;
     private final NumericAnswerParser numericParser;
+    private final DescriptiveStatsService descriptiveStats;
 
     // Rango aceptado para las preguntas numéricas (vida profesional / desempleo): 0–45 años.
     private static final double NUM_MIN = 0, NUM_MAX = 45;
@@ -32,7 +34,8 @@ public class StatsService {
                         SubmissionRepository submissionRepo,
                         SubmissionAnswerRepository answerRepo,
                         QuestionInferenceService inference,
-                        NumericAnswerParser numericParser) {
+                        NumericAnswerParser numericParser,
+                        DescriptiveStatsService descriptiveStats) {
         this.surveyRepo = surveyRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
@@ -40,6 +43,7 @@ public class StatsService {
         this.answerRepo = answerRepo;
         this.inference = inference;
         this.numericParser = numericParser;
+        this.descriptiveStats = descriptiveStats;
     }
 
     @Transactional(readOnly = true)
@@ -238,21 +242,21 @@ public class StatsService {
         }
         Collections.sort(nums);
 
-        dto.setTotalAnswered(nums.size());                 // n = válidos (p.ej. 145)
+        dto.setTotalAnswered(nums.size());                 // n = válidos (p.ej. 180)
         dto.setNoResponseCount(invalid);                    // crudos no interpretables / fuera de rango
         if (nums.isEmpty()) return;
 
-        double mean = nums.stream().mapToDouble(d -> d).average().orElse(0);
-        dto.setMean(mean);
-        if (nums.size() >= 2) {
-            double var = nums.stream().mapToDouble(d -> (d - mean) * (d - mean)).sum()
-                    / (nums.size() - 1);            // varianza muestral
-            dto.setStdDev(Math.sqrt(var));
-        }
-        dto.setMin(nums.get(0));
-        dto.setMax(nums.get(nums.size() - 1));
-        int n = nums.size(), mid = n / 2;
-        dto.setMedian(n % 2 == 0 ? (nums.get(mid - 1) + nums.get(mid)) / 2.0 : nums.get(mid));
+        // Estadística descriptiva completa (percentiles, Tukey, asimetría/curtosis, Shapiro-Wilk).
+        DescriptiveStatsDTO d = descriptiveStats.compute(nums);
+        dto.setDescriptive(d);
+
+        // Campos resumidos que ya consume el dashboard; la mediana por interpolación lineal
+        // (QUARTILE.INC) es la que usa el informe (criterio B).
+        dto.setMean(d.getMean());
+        dto.setStdDev(d.getStdDev());
+        dto.setMin(d.getMin());
+        dto.setMax(d.getMax());
+        dto.setMedian(d.getMedian());
     }
 
     private List<String> answered(List<SubmissionAnswer> answers) {

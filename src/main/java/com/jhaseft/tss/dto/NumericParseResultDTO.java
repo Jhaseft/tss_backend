@@ -14,8 +14,13 @@ public class NumericParseResultDTO {
     /** VALIDO = número limpio en años; CONVERTIDO = se derivó de texto/unidad; INVALIDO = descartado. */
     public enum Status { VALIDO, CONVERTIDO, INVALIDO }
 
-    /** Motivo del descarte (solo cuando status = INVALIDO). */
-    public enum Reason { VACIO, SOLO_ESPACIOS, TEXTO_SIN_NUMERO, FUERA_DE_RANGO }
+    /**
+     * Motivo del descarte (solo cuando status = INVALIDO).
+     * COTA_ABIERTA = respuesta ambigua con cota ("Más de 10 años", ">10", "aprox 5");
+     * se descarta por no conocerse el valor exacto, pero se conserva el número
+     * detectado en {@code numericValue} como referencia (criterio B del grupo).
+     */
+    public enum Reason { VACIO, SOLO_ESPACIOS, TEXTO_SIN_NUMERO, FUERA_DE_RANGO, COTA_ABIERTA }
 
     private String rawValue;
     private Double numericValue;

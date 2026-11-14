@@ -102,8 +102,48 @@ class NumericAnswerParserTest {
         assertEquals(Status.VALIDO, r.getStatus());
     }
 
+    // ── Criterio B (decisión del grupo) ──────────────────────────────────────
+
     @Test
-    void masDeDiezAniosExtraeDiez() {
-        assertEquals(10.0, parse("Más de 10 años").getNumericValue(), 1e-9);
+    void dosAniosEnPalabraEsDos() {
+        NumericParseResultDTO r = parse("Dos años");
+        assertEquals(2.0, r.getNumericValue(), 1e-9);
+        assertEquals(Status.CONVERTIDO, r.getStatus());
+    }
+
+    @Test
+    void palabraVeinteEsVeinte() {
+        NumericParseResultDTO r = parse("veinte");
+        assertEquals(20.0, r.getNumericValue(), 1e-9);
+        assertEquals(Status.CONVERTIDO, r.getStatus());
+    }
+
+    @Test
+    void treintaYCincoAniosEsTreintaYCinco() {
+        assertEquals(35.0, parse("treinta y cinco años").getNumericValue(), 1e-9);
+    }
+
+    @Test
+    void masDeDiezAniosEsCotaAbierta() {
+        NumericParseResultDTO r = parse("Más de 10 años");
+        assertEquals(Status.INVALIDO, r.getStatus());
+        assertEquals(Reason.COTA_ABIERTA, r.getReason());
+        assertEquals(10.0, r.getNumericValue(), 1e-9); // conserva la referencia
+    }
+
+    @Test
+    void naEsTextoSinNumero() {
+        NumericParseResultDTO r = parse("n/a");
+        assertEquals(Status.INVALIDO, r.getStatus());
+        assertEquals(Reason.TEXTO_SIN_NUMERO, r.getReason());
+    }
+
+    @Test
+    void espacioDuroSeNormalizaIgualQueEspacioNormal() {
+        // U+00A0 (espacio duro de Microsoft Forms) debe comportarse como un espacio normal.
+        NumericParseResultDTO duro   = parse("Red de contactos limitada.");
+        NumericParseResultDTO normal = parse("Red de contactos limitada.");
+        assertEquals(normal.getReason(), duro.getReason());
+        assertEquals(Reason.TEXTO_SIN_NUMERO, duro.getReason());
     }
 }

@@ -22,6 +22,10 @@ public class QuestionStatsDTO {
     private List<String> sampleResponses;
     private List<FrequencyEntryDTO> keywords;
 
+    // Estadística descriptiva completa (solo preguntas NUMERIC): percentiles, Tukey,
+    // asimetría/curtosis, Shapiro-Wilk, IC de la media. Ver DescriptiveStatsService.
+    private DescriptiveStatsDTO descriptive;
+
     public Long getQuestionId() { return questionId; }
     public void setQuestionId(Long questionId) { this.questionId = questionId; }
 
@@ -69,4 +73,7 @@ public class QuestionStatsDTO {
 
     public List<FrequencyEntryDTO> getKeywords() { return keywords; }
     public void setKeywords(List<FrequencyEntryDTO> keywords) { this.keywords = keywords; }
+
+    public DescriptiveStatsDTO getDescriptive() { return descriptive; }
+    public void setDescriptive(DescriptiveStatsDTO descriptive) { this.descriptive = descriptive; }
 }

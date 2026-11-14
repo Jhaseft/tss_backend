@@ -32,3 +32,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+docs/informe/
+
+### Respaldos de BD (pg_dump) ###
+backups/
