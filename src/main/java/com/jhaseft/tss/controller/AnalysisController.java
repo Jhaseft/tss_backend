@@ -3,10 +3,12 @@ package com.jhaseft.tss.controller;
 import com.jhaseft.tss.dto.CrossTabRequestDTO;
 import com.jhaseft.tss.dto.MultivariateRequestDTO;
 import com.jhaseft.tss.service.AnalysisService;
+import com.jhaseft.tss.service.DerivedVariableService;
 import com.jhaseft.tss.service.MultivariateAnalysisService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.NoSuchElementException;
 
 @RestController
@@ -15,11 +17,20 @@ public class AnalysisController {
 
     private final AnalysisService analysisService;
     private final MultivariateAnalysisService multivariateService;
+    private final DerivedVariableService derivedVariables;
 
     public AnalysisController(AnalysisService analysisService,
-                              MultivariateAnalysisService multivariateService) {
+                              MultivariateAnalysisService multivariateService,
+                              DerivedVariableService derivedVariables) {
         this.analysisService = analysisService;
         this.multivariateService = multivariateService;
+        this.derivedVariables = derivedVariables;
+    }
+
+    /** Variables derivadas (recodificaciones) disponibles para cruzar, p. ej. el segmento de experiencia. */
+    @GetMapping("/surveys/{id}/derived-variables")
+    public List<DerivedVariableService.Info> derivedVariables(@PathVariable Long id) {
+        return derivedVariables.listForSurvey(id);
     }
 
     @PostMapping("/surveys/{id}/chi-square")
