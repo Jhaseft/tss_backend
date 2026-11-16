@@ -44,8 +44,8 @@ public class AnalysisService {
         if (subIds.isEmpty()) throw new IllegalArgumentException("La encuesta no tiene respuestas.");
 
         // Cada lado puede ser una pregunta real (id positivo) o una variable derivada (id negativo).
-        ResolvedVariable v1 = resolve(id1, subIds);
-        ResolvedVariable v2 = resolve(id2, subIds);
+        ResolvedVariable v1 = resolve(surveyId, id1, subIds);
+        ResolvedVariable v2 = resolve(surveyId, id2, subIds);
 
         // Tabla observada sobre las etiquetas en el orden del eje.
         List<String> rowLabels = new ArrayList<>(v1.orderedLabels());
@@ -124,19 +124,27 @@ public class AnalysisService {
 
     // ── Resolución de variables ────────────────────────────────────────────────
 
-    private ResolvedVariable resolve(Long id, List<Long> subIds) {
-        if (derivedVariables.isDerived(id)) return derivedVariables.resolve(id, subIds);
+    private ResolvedVariable resolve(Long surveyId, Long id, List<Long> subIds) {
+        if (derivedVariables.isDerived(id)) return derivedVariables.resolve(surveyId, id, subIds);
 
         Question q = questionRepo.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Question not found: " + id));
         List<QuestionOption> opts = optionRepo.findByQuestionIdOrderByPosition(id);
         Map<Long, String> answers = loadAnswerMap(id, subIds);   // sid → valor normalizado
 
+        // En escalas Likert se excluye "No sabe" / "No aplica" (opciones sin valor numérico), igual
+        // que en las medias y el diagrama de radar: no son un nivel de la escala. El orden del eje
+        // sigue la escala (posición de la opción), no la frecuencia.
+        boolean scale = q.getType() == QuestionType.LIKERT || q.getType() == QuestionType.MATRIX_LIKERT;
+        List<QuestionOption> usable = scale
+                ? opts.stream().filter(o -> o.getNumericValue() != null).toList()
+                : opts;
+
         List<String> orderedLabels;
         Map<String, String> toLabel = new HashMap<>();   // valor normalizado / display → etiqueta
-        if (!opts.isEmpty()) {
-            orderedLabels = opts.stream().map(QuestionOption::getDisplayText).distinct().toList();
-            for (QuestionOption o : opts) {
+        if (!usable.isEmpty()) {
+            orderedLabels = usable.stream().map(QuestionOption::getDisplayText).distinct().toList();
+            for (QuestionOption o : usable) {
                 toLabel.put(o.getValue(), o.getDisplayText());
                 toLabel.put(o.getDisplayText(), o.getDisplayText());
             }
@@ -145,7 +153,7 @@ public class AnalysisService {
         }
 
         Map<Long, String> bySubmission = new HashMap<>();
-        boolean hasOpts = !opts.isEmpty();
+        boolean hasOpts = !usable.isEmpty();
         answers.forEach((sid, val) -> {
             String label = hasOpts ? toLabel.get(val) : val;
             if (label != null) bySubmission.put(sid, label);

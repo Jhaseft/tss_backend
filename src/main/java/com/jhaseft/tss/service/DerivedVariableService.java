@@ -36,6 +36,14 @@ public class DerivedVariableService {
     static final String CONSOLIDADO = "Consolidado (>10)";
     private static final List<String> SEGMENT_ORDER = List.of(JUNIOR, INTERMEDIO, CONSOLIDADO);
 
+    // Medio de convocatoria (empleadores) agrupado en 3 categorías. Id fijo (no es −sourceId).
+    static final long MEDIOS_ID = -999L;
+    static final String MEDIOS_INTERNET = "Internet y Redes sociales";
+    static final String MEDIOS_POSTULACION = "Postulación competitiva (convocatorias públicas y privadas)";
+    static final String MEDIOS_OTROS = "Recomendación, oferta personal u otros";
+    private static final List<String> MEDIOS_ORDER =
+            List.of(MEDIOS_INTERNET, MEDIOS_POSTULACION, MEDIOS_OTROS);
+
     private final QuestionRepository questionRepo;
     private final SubmissionAnswerRepository answerRepo;
     private final SubmissionAnswerOptionRepository answerOptionRepo;
@@ -56,17 +64,25 @@ public class DerivedVariableService {
 
     public boolean isDerived(long id) { return id < 0; }
 
-    /** Variables derivadas disponibles para una encuesta (hoy, el segmento de experiencia si aplica). */
+    /** Variables derivadas cualitativas disponibles para una encuesta. */
     public List<Info> listForSurvey(Long surveyId) {
         List<Info> out = new ArrayList<>();
         experienceQuestion(surveyId).ifPresent(q ->
                 out.add(new Info(-q.getId(), "Segmento de experiencia (" + q.getText() + ")",
                         "SINGLE_ORDINAL", q.getId())));
+        mediosQuestion(surveyId).ifPresent(q ->
+                out.add(new Info(MEDIOS_ID, "Medio de convocatoria (3 grupos)",
+                        "SINGLE_NOMINAL", q.getId())));
         return out;
     }
 
     /** Resuelve una variable derivada a sus categorías por submission. */
-    public ResolvedVariable resolve(long derivedId, List<Long> subIds) {
+    public ResolvedVariable resolve(Long surveyId, long derivedId, List<Long> subIds) {
+        if (derivedId == MEDIOS_ID) return resolveMedios(surveyId, subIds);
+        return resolveSegment(derivedId, subIds);
+    }
+
+    private ResolvedVariable resolveSegment(long derivedId, List<Long> subIds) {
         long sourceId = -derivedId;
         questionRepo.findById(sourceId)
                 .orElseThrow(() -> new NoSuchElementException("Variable derivada sin fuente: " + derivedId));
@@ -80,6 +96,35 @@ public class DerivedVariableService {
         }
         return new ResolvedVariable("Segmento de experiencia", "SINGLE_ORDINAL",
                 SEGMENT_ORDER, bySubmission);
+    }
+
+    /**
+     * Medio de convocatoria (empleadores) agrupado en 3 categorías. Internet y redes sociales y
+     * Postulación competitiva se mantienen; el resto (recomendación de terceros, oferta profesional
+     * personal, medios escritos/audiovisuales y otros) se juntan. Cruzado con "Tamaño de la
+     * organización" reproduce el χ² = 14,86 del Informe 1.
+     */
+    private ResolvedVariable resolveMedios(Long surveyId, List<Long> subIds) {
+        Long sourceId = mediosQuestion(surveyId)
+                .orElseThrow(() -> new NoSuchElementException("No se encontró la pregunta de medios."))
+                .getId();
+
+        Map<Long, String> bySubmission = new HashMap<>();
+        for (SubmissionAnswer a : answerRepo.findByQuestionIdAndSubmissionIdIn(sourceId, subIds)) {
+            if (a.isNotApplicable() || a.getNormalizedValue() == null || a.getNormalizedValue().isBlank())
+                continue;
+            bySubmission.put(a.getSubmission().getId(), medioGroup(a.getNormalizedValue()));
+        }
+        return new ResolvedVariable("Medio de convocatoria (3 grupos)", "SINGLE_NOMINAL",
+                MEDIOS_ORDER, bySubmission);
+    }
+
+    static String medioGroup(String normalized) {
+        if (normalized.contains("internet") || normalized.contains("redes sociales"))
+            return MEDIOS_INTERNET;
+        if (normalized.contains("postulacion competitiva") || normalized.contains("convocatoria"))
+            return MEDIOS_POSTULACION;
+        return MEDIOS_OTROS;   // recomendación, oferta personal, medios escritos/audiovisuales, otros
     }
 
     static String segment(double z) {
@@ -136,6 +181,16 @@ public class DerivedVariableService {
                 .filter(q -> q.getType() == QuestionType.NUMERIC
                         && q.getText() != null
                         && q.getText().toUpperCase().contains("VIDA PROFESIONAL"))
+                .findFirst();
+    }
+
+    /** Pregunta de "medio de convocatoria" (empleadores): texto con "MEDIO" o "CONVOCA", de opción única. */
+    private java.util.Optional<Question> mediosQuestion(Long surveyId) {
+        return questionRepo.findBySurveyIdOrderByPosition(surveyId).stream()
+                .filter(q -> q.getType() == QuestionType.SINGLE_NOMINAL
+                        && q.getText() != null
+                        && (q.getText().toUpperCase().contains("CONVOCA")
+                            || q.getText().toUpperCase().contains("MEDIO")))
                 .findFirst();
     }
 }
