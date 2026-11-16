@@ -57,4 +57,26 @@ class MultivariateAnalysisDbTest {
         assertEquals(36, marginalX(r, "Ingenieria de Software").n);
         assertEquals(4.92, marginalX(r, "Ingenieria de Software").meanZ, 0.01);
     }
+
+    /**
+     * Métrica Z derivada "Cantidad de cargos desempeñados" (encuesta de empleadores, pregunta 9 =
+     * q420, MULTIPLE_CHOICE): Z = nº de opciones marcadas por empresa. 80 empresas, 205 cargos
+     * marcados → media 2,5625; mín 1; máx 7. Z se pide con id negativo (−420).
+     */
+    @Test
+    void cantidadDeCargosComoVariableZDerivada() {
+        MultivariateRequestDTO req = new MultivariateRequestDTO();
+        req.setQuestionIdX(415L);   // rubro / sector
+        req.setQuestionIdY(413L);   // tipo de organización
+        req.setQuestionIdZ(-420L);  // métrica derivada: cantidad de cargos
+
+        MultivariateResultDTO r = svc.analyze(14L, req);
+
+        assertEquals("Cantidad de cargos desempeñados", r.getQuestionTextZ());
+        assertEquals(80, r.getUsedN());
+        assertEquals(2.5625, r.getTotal().meanZ, 0.0001);   // 205 / 80
+        assertEquals(80, r.getPoints().size());
+        assertEquals(1.0, r.getPoints().stream().mapToDouble(p -> p.z).min().orElse(0), 1e-9);
+        assertEquals(7.0, r.getPoints().stream().mapToDouble(p -> p.z).max().orElse(0), 1e-9);
+    }
 }

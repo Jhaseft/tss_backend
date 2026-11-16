@@ -32,17 +32,20 @@ public class MultivariateAnalysisService {
     private final SubmissionRepository submissionRepo;
     private final SubmissionAnswerRepository answerRepo;
     private final NumericAnswerParser numericParser;
+    private final DerivedVariableService derivedVariables;
 
     public MultivariateAnalysisService(QuestionRepository questionRepo,
                                        QuestionOptionRepository optionRepo,
                                        SubmissionRepository submissionRepo,
                                        SubmissionAnswerRepository answerRepo,
-                                       NumericAnswerParser numericParser) {
+                                       NumericAnswerParser numericParser,
+                                       DerivedVariableService derivedVariables) {
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
         this.submissionRepo = submissionRepo;
         this.answerRepo = answerRepo;
         this.numericParser = numericParser;
+        this.derivedVariables = derivedVariables;
     }
 
     /** Registro depurado: categoría de X, categoría de Y y valor cuantitativo Z. */
@@ -52,17 +55,31 @@ public class MultivariateAnalysisService {
     public MultivariateResultDTO analyze(Long surveyId, MultivariateRequestDTO req) {
         Question qx = question(req.getQuestionIdX());
         Question qy = question(req.getQuestionIdY());
-        Question qz = question(req.getQuestionIdZ());
-        if (qz.getType() != QuestionType.NUMERIC)
-            throw new IllegalArgumentException("La variable Z debe ser numérica.");
 
         List<Long> subIds = submissionRepo.findBySurveyId(surveyId)
                 .stream().map(Submission::getId).toList();
         if (subIds.isEmpty()) throw new IllegalArgumentException("La encuesta no tiene respuestas.");
 
+        // Z puede ser una pregunta NUMERIC (se parsea el crudo) o una métrica derivada (id negativo,
+        // p. ej. "cantidad de cargos" = nº de opciones marcadas en una pregunta de selección múltiple).
+        Long zId = req.getQuestionIdZ();
+        boolean zDerived = derivedVariables.isDerived(zId);
+        String zText;
+        Map<Long, Double> zDerivedValues = Map.of();
+        Map<Long, SubmissionAnswer> az = Map.of();
+        if (zDerived) {
+            zText = derivedVariables.zLabel(question(-zId));
+            zDerivedValues = derivedVariables.resolveZMetric(zId, subIds);
+        } else {
+            Question qz = question(zId);
+            if (qz.getType() != QuestionType.NUMERIC)
+                throw new IllegalArgumentException("La variable Z debe ser numérica o una métrica derivada.");
+            zText = qz.getText();
+            az = answersBySubmission(zId, subIds);
+        }
+
         Map<Long, SubmissionAnswer> ax = answersBySubmission(req.getQuestionIdX(), subIds);
         Map<Long, SubmissionAnswer> ay = answersBySubmission(req.getQuestionIdY(), subIds);
-        Map<Long, SubmissionAnswer> az = answersBySubmission(req.getQuestionIdZ(), subIds);
         Map<Long, SubmissionAnswer> af = req.getFilterQuestionId() != null
                 ? answersBySubmission(req.getFilterQuestionId(), subIds) : Map.of();
 
@@ -86,20 +103,23 @@ public class MultivariateAnalysisService {
             String y = category(ay.get(sid), gY);
             if (x == null) { excluded.merge("X_SIN_DATO", 1, Integer::sum); continue; }
             if (y == null) { excluded.merge("Y_SIN_DATO", 1, Integer::sum); continue; }
-            SubmissionAnswer za = az.get(sid);
-            NumericParseResultDTO z = za == null ? null
-                    : numericParser.parse(za.getRawValue(), NUM_MIN, NUM_MAX);
-            if (z == null || !z.isValid() || z.getNumericValue() == null) {
-                excluded.merge("Z_INVALIDO", 1, Integer::sum);
-                continue;
+            Double z;
+            if (zDerived) {
+                z = zDerivedValues.get(sid);
+            } else {
+                SubmissionAnswer za = az.get(sid);
+                NumericParseResultDTO parsed = za == null ? null
+                        : numericParser.parse(za.getRawValue(), NUM_MIN, NUM_MAX);
+                z = (parsed != null && parsed.isValid()) ? parsed.getNumericValue() : null;
             }
-            recs.add(new Rec(x, y, z.getNumericValue()));
+            if (z == null) { excluded.merge("Z_INVALIDO", 1, Integer::sum); continue; }
+            recs.add(new Rec(x, y, z));
         }
 
         MultivariateResultDTO out = aggregate(recs, scaleOrder(qx), scaleOrder(qy));
         out.setQuestionIdX(qx.getId()); out.setQuestionTextX(qx.getText());
         out.setQuestionIdY(qy.getId()); out.setQuestionTextY(qy.getText());
-        out.setQuestionIdZ(qz.getId()); out.setQuestionTextZ(qz.getText());
+        out.setQuestionIdZ(zId); out.setQuestionTextZ(zText);
         out.setExcluded(excluded);
         return out;
     }

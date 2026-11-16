@@ -18,7 +18,7 @@ class MultivariateAnalysisServiceTest {
 
     // El núcleo no usa los repositorios; se puede instanciar con dependencias nulas.
     private final MultivariateAnalysisService svc =
-            new MultivariateAnalysisService(null, null, null, null, null);
+            new MultivariateAnalysisService(null, null, null, null, null, null);
 
     private static final List<Rec> DOCENTE = List.of(
             new Rec("C.Datos", "B.Estatales", 3),   // T1

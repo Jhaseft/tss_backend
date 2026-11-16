@@ -10,7 +10,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -24,6 +23,7 @@ public class StatsService {
     private final QuestionInferenceService inference;
     private final NumericAnswerParser numericParser;
     private final DescriptiveStatsService descriptiveStats;
+    private final KeywordExtractor keywordExtractor;
 
     // Rango aceptado para las preguntas numéricas (vida profesional / desempleo): 0–45 años.
     private static final double NUM_MIN = 0, NUM_MAX = 45;
@@ -35,7 +35,8 @@ public class StatsService {
                         SubmissionAnswerRepository answerRepo,
                         QuestionInferenceService inference,
                         NumericAnswerParser numericParser,
-                        DescriptiveStatsService descriptiveStats) {
+                        DescriptiveStatsService descriptiveStats,
+                        KeywordExtractor keywordExtractor) {
         this.surveyRepo = surveyRepo;
         this.questionRepo = questionRepo;
         this.optionRepo = optionRepo;
@@ -44,6 +45,7 @@ public class StatsService {
         this.inference = inference;
         this.numericParser = numericParser;
         this.descriptiveStats = descriptiveStats;
+        this.keywordExtractor = keywordExtractor;
     }
 
     @Transactional(readOnly = true)
@@ -154,48 +156,10 @@ public class StatsService {
         return dto;
     }
 
-    // ── Extracción de palabras clave para preguntas abiertas (TEXT_LONG) ──────
-    // Agrupa menciones por tema (sinónimos) y cuenta cuántas RESPUESTAS mencionan
-    // cada tema. Sirve para visualizar tendencias en texto libre (áreas, herramientas,
-    // competencias) sin leer una por una. Los valores ya vienen normalizados
-    // (minúsculas y sin tildes), por eso los patrones se escriben así.
-    private static final Map<String, Pattern> KEYWORD_GROUPS = new LinkedHashMap<>();
-    static {
-        KEYWORD_GROUPS.put("IA / Agentes", Pattern.compile("\\bia\\b|\\bai\\b|inteligencia artif|inteligente artif|machine learning|maching learning|\\bmlops\\b|\\bml\\b|\\bllm|prompt|agentic|agentes|deep learning|redes neuronales"));
-        KEYWORD_GROUPS.put("Ciberseguridad", Pattern.compile("ciberseguridad|ciber seguridad|seguridad inform|seguridad de sistemas|seguridad|forense|forence|pentest|hacking"));
-        KEYWORD_GROUPS.put("Ciencia de Datos", Pattern.compile("ciencia de datos|analisis de datos|analisis se datos|big data|data warehouse|ingenier[oa]s de datos|analitica|\\bdatos\\b|\\bbi\\b|business intelligence|power bi|tableau"));
-        KEYWORD_GROUPS.put("Automatización / IoT", Pattern.compile("automatizacion|\\biot\\b|internet de las cosas|\\brpa\\b|robotica"));
-        KEYWORD_GROUPS.put("Cloud", Pattern.compile("\\bcloud\\b|\\bnube\\b|computacion en la nube|\\baws\\b|\\bazure\\b|\\bgcp\\b"));
-        KEYWORD_GROUPS.put("DevOps", Pattern.compile("devops|docker|kubernetes|ci/cd|jenkins|terraform"));
-        KEYWORD_GROUPS.put("Desarrollo Web/Móvil", Pattern.compile("\\breact\\b|angular|\\bvue\\b|node|flutter|desarrollo web|desarrollo movil|programacion movil|\\bapi\\b|microservicios|laravel|spring|\\bnest\\b"));
-        KEYWORD_GROUPS.put("Bases de Datos", Pattern.compile("base de datos|bases de datos|\\bsql\\b|postgres|mongo"));
-        KEYWORD_GROUPS.put("Lenguajes de programación", Pattern.compile("\\bpython\\b|\\bjava\\b|javascript|\\bc\\+\\+|\\bc#|\\bgo\\b"));
-        KEYWORD_GROUPS.put("Blockchain", Pattern.compile("blockchain|solidity|web3"));
-        KEYWORD_GROUPS.put("Trabajo en equipo", Pattern.compile("trabajo en equipo|colaboracion|equipos multidisc"));
-        KEYWORD_GROUPS.put("Comunicación", Pattern.compile("comunicacion"));
-        KEYWORD_GROUPS.put("Resolución de problemas", Pattern.compile("resolucion de problemas|solucion de problemas|pensamiento critico|analitic"));
-        KEYWORD_GROUPS.put("Liderazgo / Gestión", Pattern.compile("liderazgo|gestion de proyectos|\\blider"));
-        KEYWORD_GROUPS.put("Aprendizaje continuo", Pattern.compile("aprendizaje continuo|adaptab|actualizacion|autoaprendizaje"));
-        KEYWORD_GROUPS.put("Inglés", Pattern.compile("\\bingles\\b|idioma"));
-        KEYWORD_GROUPS.put("Habilidades blandas", Pattern.compile("habilidades blandas|soft skills|competencias blandas"));
-    }
-
+    // Palabras clave de preguntas abiertas (TEXT_LONG): se delega en KeywordExtractor, que
+    // mantiene el vocabulario común y permite comparar el texto libre entre encuestas.
     private List<FrequencyEntryDTO> extractKeywords(List<String> values) {
-        if (values.isEmpty()) return List.of();
-        int total = values.size();
-        List<FrequencyEntryDTO> out = new ArrayList<>();
-        for (Map.Entry<String, Pattern> g : KEYWORD_GROUPS.entrySet()) {
-            long c = values.stream().filter(v -> g.getValue().matcher(v).find()).count();
-            if (c > 0) {
-                FrequencyEntryDTO f = new FrequencyEntryDTO();
-                f.setLabel(g.getKey());
-                f.setCount(c);
-                f.setPercentage(c * 100.0 / total);
-                out.add(f);
-            }
-        }
-        out.sort((a, b) -> Long.compare(b.getCount(), a.getCount()));
-        return out.size() > 12 ? new ArrayList<>(out.subList(0, 12)) : out;
+        return keywordExtractor.extract(values, 12);
     }
 
     private QuestionStatsDTO buildMatrix(String groupName,

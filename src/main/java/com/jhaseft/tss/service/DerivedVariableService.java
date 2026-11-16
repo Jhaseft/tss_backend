@@ -6,6 +6,7 @@ import com.jhaseft.tss.model.QuestionType;
 import com.jhaseft.tss.model.SubmissionAnswer;
 import com.jhaseft.tss.repository.QuestionRepository;
 import com.jhaseft.tss.repository.SubmissionAnswerRepository;
+import com.jhaseft.tss.repository.SubmissionAnswerOptionRepository;
 import com.jhaseft.tss.service.parsing.NumericAnswerParser;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.stream.Collectors;
 
 /**
  * Variables derivadas (recodificaciones) disponibles para el análisis de asociación, definidas en
@@ -36,13 +38,16 @@ public class DerivedVariableService {
 
     private final QuestionRepository questionRepo;
     private final SubmissionAnswerRepository answerRepo;
+    private final SubmissionAnswerOptionRepository answerOptionRepo;
     private final NumericAnswerParser parser;
 
     public DerivedVariableService(QuestionRepository questionRepo,
                                   SubmissionAnswerRepository answerRepo,
+                                  SubmissionAnswerOptionRepository answerOptionRepo,
                                   NumericAnswerParser parser) {
         this.questionRepo = questionRepo;
         this.answerRepo = answerRepo;
+        this.answerOptionRepo = answerOptionRepo;
         this.parser = parser;
     }
 
@@ -63,7 +68,7 @@ public class DerivedVariableService {
     /** Resuelve una variable derivada a sus categorías por submission. */
     public ResolvedVariable resolve(long derivedId, List<Long> subIds) {
         long sourceId = -derivedId;
-        Question source = questionRepo.findById(sourceId)
+        questionRepo.findById(sourceId)
                 .orElseThrow(() -> new NoSuchElementException("Variable derivada sin fuente: " + derivedId));
 
         Map<Long, String> bySubmission = new HashMap<>();
@@ -81,6 +86,49 @@ public class DerivedVariableService {
         if (z <= 5) return JUNIOR;
         if (z <= 10) return INTERMEDIO;
         return CONSOLIDADO;
+    }
+
+    // ── Métricas numéricas derivadas (Variable Z del módulo multivariable) ───────────
+
+    /**
+     * Métricas numéricas derivadas: la "cantidad de opciones marcadas" de cada pregunta de selección
+     * múltiple (p. ej. en la encuesta de empleadores, la cantidad de cargos que desempeñan los
+     * titulados — pregunta 9). Se cuentan las opciones de {@code submission_answer_options}.
+     */
+    public List<Info> listZMetrics(Long surveyId) {
+        return questionRepo.findBySurveyIdOrderByPosition(surveyId).stream()
+                .filter(q -> q.getType() == QuestionType.MULTIPLE_CHOICE)
+                .map(q -> new Info(-q.getId(), zLabel(q), "NUMERIC_COUNT", q.getId()))
+                .toList();
+    }
+
+    /** Etiqueta de la métrica de conteo; caso especial para la pregunta de cargos. */
+    public String zLabel(Question q) {
+        String t = q.getText() == null ? "" : q.getText();
+        if (t.toLowerCase().contains("cargo")) return "Cantidad de cargos desempeñados";
+        String s = t.length() > 40 ? t.substring(0, 40) + "…" : t;
+        return "Cantidad de opciones marcadas: " + s;
+    }
+
+    /**
+     * Valor de la métrica Z derivada por submission = nº de opciones marcadas en la pregunta fuente.
+     * Solo incluye submissions con al menos una opción marcada (las no respondidas se excluyen).
+     */
+    public Map<Long, Double> resolveZMetric(long derivedId, List<Long> subIds) {
+        long sourceId = -derivedId;
+        List<SubmissionAnswer> answers = answerRepo.findByQuestionIdAndSubmissionIdIn(sourceId, subIds)
+                .stream().filter(a -> !a.isNotApplicable()).toList();
+        Map<Long, Long> answerToSubmission = answers.stream().collect(Collectors.toMap(
+                SubmissionAnswer::getId, a -> a.getSubmission().getId(), (x, y) -> x));
+
+        List<Long> answerIds = new ArrayList<>(answerToSubmission.keySet());
+        Map<Long, Double> counts = new HashMap<>();
+        if (!answerIds.isEmpty())
+            answerOptionRepo.findByAnswerIdIn(answerIds).forEach(o -> {
+                Long sub = answerToSubmission.get(o.getAnswer().getId());
+                if (sub != null) counts.merge(sub, 1.0, Double::sum);
+            });
+        return counts;
     }
 
     private java.util.Optional<Question> experienceQuestion(Long surveyId) {
